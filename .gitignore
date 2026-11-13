@@ -1,0 +1,27 @@
+# Dependencies and OS metadata
+node_modules/
+.DS_Store
+._*
+
+# Credentials and runtime state (never commit)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+plugin-auth*.json
+logins*.json
+cookies*.json
+*.cookie
+*.log
+doubaowork-direct/
+checkins/
+tmp/
+.cache/
+
+# Generated local packages / reports
+*.tgz
+*.zip
+coverage/
