@@ -38,7 +38,7 @@ magpie plugin add github:245678000000/magpie-doubaowork-auth
 - 自动探测路径：`%LOCALAPPDATA%\Doubao\Application\app\Doubao.exe`。装在别的盘或自定义目录时，用 `DW_DOUBAO_BIN` 指向该文件，然后重启 Magpie。
 - **不要**指向同目录的 `Doubao_browser_proxy.exe`：它只是转发器，会把继承的 CDP 匿名管道传给子进程时断开，表现为「已找到浏览器，但独立登录通信未建立」。必须指向 `Doubao.exe` 本身。
 - 启动时会为豆包附加 `--saman-browser-entry`（豆包内部开关，把桌面端切换成浏览器进程）；其余参数与 Chrome / Edge 完全一致，仍走匿名管道，不开放调试端口。这是 best-effort：厂商改版可能改变或移除该开关，届时握手会明确失败，请回退到 Chrome / Edge。
-- 隐私边界不变：仍使用全新临时资料目录（`%TEMP%\doubao-login-*`，当前用户与 SYSTEM 的 ACL），不读取 `%LOCALAPPDATA%\Doubao\User Data`，不修改豆包安装目录；客户端按自身策略下载的组件留在该临时目录，登录结束即清理。
+- 隐私边界不变：仍使用全新临时资料目录（插件自己的 `<Magpie 配置>/doubaowork-direct/tmp/doubao-login-*`，当前用户与 SYSTEM 的 ACL），不读取 `%LOCALAPPDATA%\Doubao\User Data`，不修改豆包安装目录；客户端按自身策略下载的组件留在该临时目录，登录结束即清理。
 
 ### 从本地目录安装
 
