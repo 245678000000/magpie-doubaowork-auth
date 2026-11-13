@@ -38,9 +38,14 @@ export function createLoginManager({
         await mkdir(root, { recursive: true, mode: 0o700 });
         browser = new Browser({
           tmpRoot: join(root, "tmp"),
-          async importAccount(cookies) {
-            let secret = credentials({ cookies });
-            if (!secret.deviceId)
+          async importAccount(cookies, { identity = {} } = {}) {
+            // The browser session's own identifiers win; cookies and the
+            // desktop client's Local State only fill gaps.
+            let secret = credentials({
+              cookies,
+              ...(identity && typeof identity === "object" ? identity : {}),
+            });
+            if (!secret.deviceId || !secret.webId)
               secret = {
                 ...(await metadata()),
                 ...Object.fromEntries(

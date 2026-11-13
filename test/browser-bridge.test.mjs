@@ -11,6 +11,7 @@ import {
   isDoubaoPage,
   browserArgs,
   availableBrowsers,
+  sessionIdentity,
 } from "../browser-login.mjs";
 const cookie = {
   name: "sessionid",
@@ -351,7 +352,8 @@ test("云端登录上下文传入接入回调，成功状态与失败状态均�
   const f = await setup({
     importAccount: async (_cookies, context) => {
       calls++;
-      assert.deepEqual(context, { destination: "cloud" });
+      assert.equal(context.destination, "cloud");
+      assert.deepEqual(context.identity, {});
       return {
         name: "测试账号",
         updated: false,
@@ -425,5 +427,84 @@ test("需要用户确认的登录：稳定 Cookie 先保留窗口，确认后才
     assert.equal(f.login.status().state, "success");
   } finally {
     await f.done();
+  }
+});
+
+test("页面会话身份只接受有界字段", () => {
+  assert.deepEqual(
+    sessionIdentity(
+      JSON.stringify({
+        deviceId: "1364912078366345",
+        webId: "7707675487837259290",
+        clientVersion: "2.36.8",
+        chromiumVersion: "147.0.7727.149",
+        channel: "1020",
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        extra: "discard",
+      }),
+    ),
+    {
+      deviceId: "1364912078366345",
+      webId: "7707675487837259290",
+      clientVersion: "2.36.8",
+      chromiumVersion: "147.0.7727.149",
+      channel: "1020",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    },
+  );
+  for (const raw of [
+    "",
+    "not-json",
+    "[]",
+    JSON.stringify({ deviceId: "bad\r\nvalue", webId: "has space" }),
+    JSON.stringify({ deviceId: "x".repeat(65), webId: "bad web" }),
+    "x".repeat(5000),
+  ])
+    assert.deepEqual(sessionIdentity(raw), {});
+});
+
+test("登录接入携带浏览器页面自己的设备标识", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dw-identity-"));
+  let seen = null,
+    closes = 0;
+  const login = new BrowserLogin({
+    tmpRoot: root,
+    pollMs: 60_000,
+    discover: async () => options,
+    launch: async () => ({
+      cookies: async () => [cookie],
+      identity: async () => ({
+        deviceId: "BROWSER_DEVICE",
+        webId: "BROWSER_WEB",
+        clientVersion: "2.36.8",
+      }),
+      dispose: async () => {
+        closes++;
+      },
+    }),
+    importAccount: async (_rows, context) => {
+      seen = context?.identity;
+      return { name: "测试账号", updated: false };
+    },
+  });
+  const inspect = async () => {
+    const session = login.current;
+    clearTimeout(session?.timer);
+    if (session) await login.inspect(session);
+  };
+  try {
+    await login.start("chrome");
+    await inspect();
+    await inspect();
+    assert.deepEqual(seen, {
+      deviceId: "BROWSER_DEVICE",
+      webId: "BROWSER_WEB",
+      clientVersion: "2.36.8",
+    });
+    assert.equal(login.status().state, "success");
+    assert.equal(closes, 1);
+  } finally {
+    await login.dispose();
+    await rm(root, { recursive: true, force: true });
   }
 });

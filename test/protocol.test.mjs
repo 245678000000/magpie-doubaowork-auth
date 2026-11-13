@@ -141,7 +141,7 @@ test("仅 decision.type=verify 判定人工验证，429 外壳码不当成验证
     error_msg: "FIXTURE_PRIVATE_TEXT",
   });
   assert.equal(rate.reason, "rate_limited");
-  assert(rate.message.includes("本次响应未明确要求人工验证"));
+  assert(rate.message.includes("设备标识"));
   assert(!rate.message.includes("豆包上游明确要求人工验证"));
   assert(!rate.message.includes("FIXTURE_PRIVATE_TEXT"));
   assert.equal(

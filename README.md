@@ -75,6 +75,15 @@ GitHub：[245678000000/magpie-doubaowork-auth](https://github.com/245678000000/m
 
 此版本改进诊断和确认流程，不保证服务端验证或限流会自动解除。需要反馈时，只提供版本、错误分类和数字上游码，不要分享 Cookie 或验证码。
 
+## 设备标识（device_id / web_id）
+
+从 **v0.1.4** 起，登录完成后会在独立窗口内读取该网页会话自己的设备标识，并随账号快照保存：
+
+- 来源是登录页 `localStorage` 的 `client_device_info.deviceId`、`samantha_web_web_id.web_id`，以及同一份记录里的 `clientVersion`、`chromiumVersion`、`channel`、`userAgent`；插件不读桌面客户端的 Cookie 数据库。
+- 这些值会作为 `device_id`、`web_id`、`pc_version`、`chromium_version`、`channel` 随请求下发。上游会把这些字段当作会话的一部分校验；缺失时容易得到 `429`（业务码 `710022004`）。
+- 只有在网页里读不到时，才回退到桌面客户端 `Local State` 的 `aha.device.device_id`（Windows 依次尝试 `DoubaoWork\User Data` 与 `Doubao\User Data`）。
+- 升级后请重新登录一次，让已有账号补上这些字段；只升级不重登不会自动补齐。
+
 ## 功能与边界
 
 | 项目             | 说明                                                                                                                      |
