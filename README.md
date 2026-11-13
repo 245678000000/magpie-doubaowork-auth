@@ -14,7 +14,7 @@
 
 ### 从 GitHub 安装
 
-在 Magpie **插件 → 发现 → GitHub 非官方插件** 中搜索 `magpie-doubaowork-auth` 或 `doubaowork`，核对仓库所有者为 `245678000000`。GitHub 与 Magpie 的索引缓存更新后会显示；不属于社区官方认证插件。
+在 Magpie **插件 → 发现** 中，将“来源”设为 **非官方插件 · GitHub**，再搜索 `magpie-doubaowork-auth` 或 `doubaowork`，核对仓库所有者为 `245678000000`。GitHub 与 Magpie 的索引缓存更新后会显示；不属于社区官方认证插件。
 
 也可以在“添加插件”中粘贴 `github:245678000000/magpie-doubaowork-auth`，或执行：
 
