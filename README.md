@@ -79,7 +79,7 @@ GitHub：[245678000000/magpie-doubaowork-auth](https://github.com/245678000000/m
 
 从 **v0.1.4** 起，登录完成后会在独立窗口内读取该网页会话自己的设备标识，并随账号快照保存：
 
-- 来源是登录页 `localStorage` 的 `client_device_info.deviceId`、`samantha_web_web_id.web_id`，以及同一份记录里的 `clientVersion`、`chromiumVersion`、`channel`、`userAgent`；插件不读桌面客户端的 Cookie 数据库。
+- 来源是登录页 `localStorage` 的 `client_device_info.deviceId`、`samantha_web_web_id.web_id`，以及同一份记录里的 `clientVersion`、`chromiumVersion`、`appChannel`（缺失时取 `channel`）、`userAgent`；插件不读桌面客户端的 Cookie 数据库。
 - 这些值会作为 `device_id`、`web_id`、`pc_version`、`chromium_version`、`channel` 随请求下发。上游会把这些字段当作会话的一部分校验；缺失时容易得到 `429`（业务码 `710022004`）。
 - 只有在网页里读不到时，才回退到桌面客户端 `Local State` 的 `aha.device.device_id`（Windows 依次尝试 `DoubaoWork\User Data` 与 `Doubao\User Data`）。
 - 升级后请重新登录一次，让已有账号补上这些字段；只升级不重登不会自动补齐。
@@ -116,7 +116,7 @@ GitHub：[245678000000/magpie-doubaowork-auth](https://github.com/245678000000/m
 
 - 每次登录使用临时目录和匿名 CDP 管道，无开放调试端口，不读取日常 Chrome / Edge 资料或桌面 Cookie 数据库。
 - 本人确认接入并核验成功、取消、关窗或 10 分钟超时后清理专用浏览器；登录页只展示进度，不展示 Cookie。
-- 如果登录 Cookie 缺少工作版设备标识，仅读取本机豆包工作 `Local State` 中的设备 ID，不读取其他资料。
+- 如果登录 Cookie 缺少工作版设备标识，Windows 上仅读取本机豆包客户端（`DoubaoWork\User Data` 优先，其次 `Doubao\User Data`）`Local State` 中的设备 ID；macOS 只尝试 `DoubaoWork`，不读取其他产品的资料。
 - 登录快照放在 Magpie 的私有 OAuth access 字段中，`dwc1.` 后为 base64url **编码而非加密**。保持 Magpie 配置目录私有，避免分享 `plugin-auth.json`、其备份和本机调试日志。
 - 本机已核验 Magpie 账号库权限为 `0600`，本插件临时目录 `0700`、签到账本 `0600`（macOS）。Windows 临时浏览器目录使用当前用户与 SYSTEM 的 ACL。文件权限不替代磁盘加密。
 - 会话失效会标记需重新登录；不保存验证码，不绕过人工验证，也不伪造设备 ID。

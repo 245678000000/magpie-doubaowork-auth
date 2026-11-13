@@ -620,12 +620,21 @@ export class BrowserLogin {
         "检测到豆包登录，正在核验账号并保存到本机…",
       );
       // Exactly one import attempt. A timeout is uncertain, not a reason to retry silently.
-      let identity = {};
+      let identity = {},
+        identityMissing = true;
       try {
         identity = (await session.handle.identity?.()) || {};
+        identityMissing = !(identity.deviceId && identity.webId);
       } catch {
         identity = {};
       }
+      if (identityMissing)
+        this.update(
+          session,
+          "importing",
+          "未从浏览器读取到完整的设备标识，正在回退本机客户端 Local State…",
+          { identityMissing: true },
+        );
       if (this.current !== session || session.cancelled) return;
       let result;
       try {
@@ -663,6 +672,7 @@ export class BrowserLogin {
           updated: result.updated,
           cloudSynced: result.cloudSynced === true,
           cloudOrigin: result.cloudOrigin || "",
+          identityMissing,
         },
       );
       await this.finish(session);

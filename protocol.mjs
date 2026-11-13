@@ -251,28 +251,29 @@ async function jsonLimited(response) {
     reader.releaseLock();
   }
 }
-export async function deviceMetadata(home = homedir()) {
+export async function deviceMetadata({
+  home = homedir(),
+  platform = process.platform,
+  env = process.env,
+} = {}) {
   // Read only a device identifier, never the desktop client's Cookie database.
   // The desktop build has used more than one product folder name, so try the
   // known ones in order instead of assuming a single install layout.
   const roots =
-    process.platform === "win32"
+    platform === "win32"
       ? [
           join(
-            process.env.LOCALAPPDATA || join(home, "AppData", "Local"),
+            env.LOCALAPPDATA || join(home, "AppData", "Local"),
             "DoubaoWork",
             "User Data",
           ),
           join(
-            process.env.LOCALAPPDATA || join(home, "AppData", "Local"),
+            env.LOCALAPPDATA || join(home, "AppData", "Local"),
             "Doubao",
             "User Data",
           ),
         ]
-      : [
-          join(home, "Library", "Application Support", "DoubaoWork"),
-          join(home, "Library", "Application Support", "Doubao"),
-        ];
+      : [join(home, "Library", "Application Support", "DoubaoWork")];
   for (const base of roots) {
     try {
       const p = join(base, "Local State");
