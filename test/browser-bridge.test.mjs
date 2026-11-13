@@ -266,10 +266,11 @@ test("导入结果不确定时停止、不重复提交、不回显凭据", async
   }
 });
 test("启动中取消会等待资源就绪再清理；核验时避免误取消", async () => {
-  const gate = deferred();
+  const gate = deferred(), launched = deferred();
   let closes = 0;
   const f = await setup({
     launch: async () => {
+      launched.resolve();
       await gate.promise;
       return {
         cookies: async () => [],
@@ -281,7 +282,7 @@ test("启动中取消会等待资源就绪再清理；核验时避免误取消",
   });
   try {
     const start = f.login.start();
-    await new Promise((r) => setTimeout(r, 30));
+    await Promise.race([launched.promise, start]);
     const cancel = f.login.cancel();
     gate.resolve();
     await Promise.all([start, cancel]);
@@ -289,11 +290,13 @@ test("启动中取消会等待资源就绪再清理；核验时避免误取消",
     assert.equal(closes, 1);
     assert.deepEqual(await readdir(f.root), []);
   } finally {
+    gate.resolve();
     await f.done();
   }
-  const importGate = deferred(),
+  const importGate = deferred(), importing = deferred(),
     g = await setup({
       importAccount: async () => {
+        importing.resolve();
         await importGate.promise;
         return { name: "甲", updated: false };
       },
@@ -303,7 +306,7 @@ test("启动中取消会等待资源就绪再清理；核验时避免误取消",
     g.setCookies([cookie]);
     await g.inspect();
     const inspecting = g.inspect();
-    await new Promise((r) => setTimeout(r, 10));
+    await Promise.race([importing.promise, inspecting]);
     await assert.rejects(g.login.cancel(), (e) => e.status === 409);
     importGate.resolve();
     await inspecting;
