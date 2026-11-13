@@ -330,7 +330,7 @@ export async function launchIsolatedBrowser(
       503,
       platform === "win32"
         ? "已找到浏览器，但独立登录通信未建立。请更新 Magpie 和 Chrome / Edge / 豆包；如受单位策略管理，请检查是否允许浏览器开发者工具。"
-        : "已找到浏览器，但独立窗口启动失败。请更新 Chrome / Edge / 豆包 后重试。",
+        : "已找到浏览器，但独立登录通信未建立。请更新 Magpie 和 Chrome / Edge；如受单位策略管理，请检查是否允许浏览器开发者工具。",
     );
   }
   return {
@@ -413,6 +413,11 @@ export class BrowserLogin {
   }
   async start(browserId, context = {}) {
     if (this.disposed) throw failure(503, "登录服务正在停止。");
+    if (browserId === "doubao" && process.platform !== "win32")
+      throw failure(
+        400,
+        "豆包内置浏览器仅支持 Windows。请改用 Chrome / Edge，或在插件选项中恢复自动选择。",
+      );
     if (this.current) {
       if (
         (this.current.context.destination || "local") !==
@@ -459,7 +464,9 @@ export class BrowserLogin {
         throw failure(
           409,
           browserId === undefined
-            ? "未检测到 Chrome、Edge 或豆包内置浏览器。请安装其中一个后重试；Windows 自定义安装请查看插件 README。"
+            ? process.platform === "win32"
+              ? "未检测到 Chrome、Edge 或豆包内置浏览器。请安装其中一个后重试；Windows 自定义安装请查看插件 README。"
+              : "未检测到 Chrome 或 Edge。请安装其中一个后重试。"
             : "未检测到所选浏览器。请安装它，或在插件选项中恢复自动选择。",
         );
       if (session.cancelled) return;

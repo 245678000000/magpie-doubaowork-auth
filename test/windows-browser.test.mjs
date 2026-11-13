@@ -119,12 +119,14 @@ test("Windows 从默认用户目录发现豆包内置浏览器，且排在 Chrom
 
 test("DW_DOUBAO_BIN 优先于默认安装路径", async () => {
   const portable = "E:\\Portable\\Doubao\\Application\\app\\Doubao.exe";
+  const fallback =
+    "C:\\Users\\fixture\\AppData\\Local\\Doubao\\Application\\app\\Doubao.exe";
   const found = await availableBrowsers(
     "win32",
     "C:\\Users\\fixture",
     { LocalAppData: "C:\\Users\\fixture\\AppData\\Local", DW_DOUBAO_BIN: portable },
     {
-      usable: async (file) => file === portable,
+      usable: async (file) => file === portable || file === fallback,
       readAppPaths: async () => ({ chrome: [], edge: [] }),
     },
   );
@@ -151,19 +153,23 @@ test("DW_DOUBAO_BIN 同样拒绝相对路径、网络共享和带参数的引号
     "Doubao.exe",
     "\\\\HOST\\share\\Doubao.exe",
     '"C:\\App\\Doubao.exe" --saman-browser-entry',
-  ])
-    assert.deepEqual(
-      await availableBrowsers(
-        "win32",
-        "C:\\Users\\fixture",
-        { DW_DOUBAO_BIN: bad },
-        {
-          usable: async () => false,
-          readAppPaths: async () => ({ chrome: [], edge: [] }),
+  ]) {
+    const probed = [];
+    const found = await availableBrowsers(
+      "win32",
+      "C:\\Users\\fixture",
+      { DW_DOUBAO_BIN: bad },
+      {
+        usable: async (file) => {
+          probed.push(file);
+          return false;
         },
-      ),
-      [],
+        readAppPaths: async () => ({ chrome: [], edge: [] }),
+      },
     );
+    assert.deepEqual(found, []);
+    assert(!probed.includes(bad), `无效路径不应进入探测: ${bad}`);
+  }
 });
 
 test("Chrome / Edge 参数逐字不变，豆包只在首位多一个内部开关", () => {
