@@ -266,7 +266,8 @@ test("导入结果不确定时停止、不重复提交、不回显凭据", async
   }
 });
 test("启动中取消会等待资源就绪再清理；核验时避免误取消", async () => {
-  const gate = deferred(), launched = deferred();
+  const gate = deferred(),
+    launched = deferred();
   let closes = 0;
   const f = await setup({
     launch: async () => {
@@ -293,7 +294,8 @@ test("启动中取消会等待资源就绪再清理；核验时避免误取消",
     gate.resolve();
     await f.done();
   }
-  const importGate = deferred(), importing = deferred(),
+  const importGate = deferred(),
+    importing = deferred(),
     g = await setup({
       importAccount: async () => {
         importing.resolve();
@@ -398,6 +400,29 @@ test("进行中的浏览器会话固定保存目标，跨目标启动会明确�
       (e) => e.status === 409,
     );
     assert.equal(f.login.status().destination, "local");
+  } finally {
+    await f.done();
+  }
+});
+
+test("需要用户确认的登录：稳定 Cookie 先保留窗口，确认后才接入", async () => {
+  const f = await setup();
+  try {
+    await f.login.start(undefined, { manual: true });
+    f.setCookies([cookie]);
+    await f.inspect();
+    await f.inspect();
+    assert.equal(f.login.status().state, "awaiting_confirmation");
+    assert.equal(f.imports, 0);
+    assert.equal(f.closes, 0);
+    await assert.rejects(
+      f.login.confirm("not_this_flow"),
+      (e) => e.status === 409,
+    );
+    await f.login.confirm(f.login.status().id);
+    assert.equal(f.imports, 1);
+    assert.equal(f.closes, 1);
+    assert.equal(f.login.status().state, "success");
   } finally {
     await f.done();
   }

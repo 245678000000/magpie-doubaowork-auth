@@ -157,33 +157,75 @@ export function endpoint(secret, path) {
   return ORIGIN + path + "?" + q.toString();
 }
 export function vendorError(status, value = {}) {
-  const code = Number(value?.error_code ?? value?.code ?? value?.error?.code),
+  const detail = plain(value?.error_detail)
+    ? value.error_detail
+    : plain(value?.error)
+      ? value.error
+      : value;
+  const code = Number(
+      detail?.code ?? detail?.error_code ?? value?.code ?? value?.error_code,
+    ),
     message = str(
-      value?.error_msg || value?.message || value?.msg || value?.error?.message,
+      detail?.error_msg ||
+        detail?.message ||
+        detail?.msg ||
+        value?.error_msg ||
+        value?.message,
     ).toLowerCase();
-  let decision = value?.extra?.decision ?? value?.decision;
+  let decision =
+    value?.extra?.decision ?? value?.decision ?? detail?.extra?.decision;
   try {
     if (typeof decision === "string" && decision.length < 65536)
       decision = JSON.parse(decision);
   } catch {
     decision = null;
   }
-  if (decision?.type === "verify" || status === 429 || code === 710022004)
-    return fail(
-      429,
-      "豆包工作要求人工验证或暂时限流，请在官方页面检查后再试。",
+  const withCode = (error, reason) =>
+    Object.assign(error, {
+      reason,
+      ...(Number.isSafeInteger(code) && code > 0 ? { upstreamCode: code } : {}),
+    });
+  const suffix =
+    Number.isSafeInteger(code) && code > 0 ? "（上游代码 " + code + "）" : "";
+  // The business code is only an envelope. Never label it CAPTCHA unless
+  // the upstream explicitly says so; never echo its challenge or raw text.
+  if (plain(decision) && decision.type === "verify")
+    return withCode(
+      fail(
+        429,
+        "豆包上游明确要求人工验证" +
+          suffix +
+          "。请重新登录本插件，在独立窗口手动完成官网验证后点击“接入 Magpie”；官方客户端可用不代表该独立会话已通过验证。",
+      ),
+      "verification_required",
     );
   if (
     status === 401 ||
     code === 710012001 ||
     /not logged in|login required/.test(message)
   )
-    return fail(401, "豆包工作登录已失效，请重新登录。");
-  return fail(
-    status >= 400 && status <= 599 ? status : 502,
-    "豆包工作请求未成功" +
-      (Number.isFinite(code) && code ? "（状态 " + code + "）" : "") +
-      "，请在官方页面核对。",
+    return withCode(
+      fail(401, "豆包工作登录已失效，请重新登录。"),
+      "session_expired",
+    );
+  if (status === 429 || code === 710022004)
+    return withCode(
+      fail(
+        429,
+        "豆包上游返回请求限流" +
+          suffix +
+          "。本次响应未明确要求人工验证；请暂停重复测试，按官方提示稍后重试。",
+      ),
+      "rate_limited",
+    );
+  return withCode(
+    fail(
+      status >= 400 && status <= 599 ? status : 502,
+      "豆包工作请求未成功" +
+        (Number.isFinite(code) && code ? "（状态 " + code + "）" : "") +
+        "，请在官方页面核对。",
+    ),
+    "upstream_error",
   );
 }
 async function jsonLimited(response) {
@@ -448,7 +490,14 @@ export function createApi({ fetchImpl = fetch } = {}) {
       response.headers.get("content-type")?.startsWith("text/event-stream")
     )
       return response;
-    const value = await jsonLimited(response);
+    let value;
+    try {
+      value = await jsonLimited(response);
+    } catch (error) {
+      if ([401, 429].includes(response.status))
+        throw vendorError(response.status);
+      throw error;
+    }
     if (!response.ok || Number(value.code ?? value.error_code ?? 0) !== 0)
       throw vendorError(response.status, value);
     if (stream) throw vendorError(response.status, value);

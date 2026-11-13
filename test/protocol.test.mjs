@@ -119,3 +119,54 @@ test("额度未知时不伪造百分比，按奖励额度实际剩余显示", ()
   assert.equal(v.windows[0].used, undefined);
   assert.equal(quotaView({ data: {} }).windows.length, 0);
 });
+
+test("仅 decision.type=verify 判定人工验证，429 外壳码不当成验证证明", async () => {
+  const { vendorError } = await import("../protocol.mjs");
+  const verify = vendorError(200, {
+    error_detail: { code: 710022004 },
+    extra: {
+      decision: JSON.stringify({
+        type: "verify",
+        subtype: "slide",
+        challenge: "FIXTURE_PRIVATE_CHALLENGE",
+      }),
+    },
+  });
+  assert.equal(verify.status, 429);
+  assert.equal(verify.reason, "verification_required");
+  assert.equal(verify.upstreamCode, 710022004);
+  assert(!verify.message.includes("FIXTURE_PRIVATE_CHALLENGE"));
+  const rate = vendorError(429, {
+    error_code: 710022004,
+    error_msg: "FIXTURE_PRIVATE_TEXT",
+  });
+  assert.equal(rate.reason, "rate_limited");
+  assert(rate.message.includes("本次响应未明确要求人工验证"));
+  assert(!rate.message.includes("豆包上游明确要求人工验证"));
+  assert(!rate.message.includes("FIXTURE_PRIVATE_TEXT"));
+  assert.equal(
+    vendorError(200, { error_detail: { code: 710012001 } }).signIn,
+    "expired",
+  );
+  assert.equal(
+    vendorError(429, { extra: { decision: "not json" } }).reason,
+    "rate_limited",
+  );
+});
+
+test("非 JSON 的 HTTP 429 仍保留限流分类，不反射网页内容", async () => {
+  const api = createApi({
+    fetchImpl: async () =>
+      new Response("<html>FIXTURE_PRIVATE_GATEWAY_BODY</html>", {
+        status: 429,
+        headers: { "content-type": "text/html" },
+      }),
+  });
+  await assert.rejects(
+    api.post(secret, "/chat/completion", {}, { stream: true }),
+    (e) =>
+      e.status === 429 &&
+      e.reason === "rate_limited" &&
+      !e.message.includes("FIXTURE_PRIVATE_GATEWAY_BODY"),
+  );
+});

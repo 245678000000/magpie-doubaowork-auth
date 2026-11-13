@@ -6,10 +6,22 @@ import { homedir } from "node:os";
 import { randomUUID, createHash } from "node:crypto";
 import { once } from "node:events";
 import { win32 as winPath } from "node:path";
-import { envValue, windowsChoices, windowsInstallPaths, windowsExecutable, readWindowsAppPaths, protectWindowsProfile } from "./windows-browser.mjs";
+import {
+  envValue,
+  windowsChoices,
+  windowsInstallPaths,
+  windowsExecutable,
+  readWindowsAppPaths,
+  protectWindowsProfile,
+} from "./windows-browser.mjs";
 
 const LOGIN_URL = "https://www.doubao.com/chat/";
-const ACTIVE = new Set(["starting", "waiting", "importing"]);
+const ACTIVE = new Set([
+  "starting",
+  "waiting",
+  "awaiting_confirmation",
+  "importing",
+]);
 const failure = (status, message) =>
   Object.assign(new Error(message), { status });
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -20,12 +32,16 @@ export async function availableBrowsers(
   home = homedir(),
   env = process.env,
   {
-    usable = async (file) => (await stat(file)).isFile() &&
+    usable = async (file) =>
+      (await stat(file)).isFile() &&
       (platform === "win32" || (await access(file, constants.X_OK), true)),
     readAppPaths = readWindowsAppPaths,
   } = {},
 ) {
-  const works = (file) => Promise.resolve().then(() => usable(file)).catch(() => false);
+  const works = (file) =>
+    Promise.resolve()
+      .then(() => usable(file))
+      .catch(() => false);
   if (platform === "win32") {
     const roots = windowsInstallPaths(home, env);
     const first = async (choice, candidates) => {
@@ -34,19 +50,30 @@ export async function availableBrowsers(
         const file = windowsExecutable(raw, choice.exe);
         if (!file || seen.has(file.toLowerCase())) continue;
         seen.add(file.toLowerCase());
-        if (await works(file)) return { id: choice.id, name: choice.name, path: file };
+        if (await works(file))
+          return { id: choice.id, name: choice.name, path: file };
       }
       return null;
     };
-    const found = await Promise.all(windowsChoices.map((b) => first(b, [
-      envValue(env, b.id === "chrome" ? "DW_CHROME_BIN" : "DW_EDGE_BIN"),
-      ...roots.map((root) => winPath.join(root, ...b.dir, "Application", b.exe)),
-    ])));
+    const found = await Promise.all(
+      windowsChoices.map((b) =>
+        first(b, [
+          envValue(env, b.id === "chrome" ? "DW_CHROME_BIN" : "DW_EDGE_BIN"),
+          ...roots.map((root) =>
+            winPath.join(root, ...b.dir, "Application", b.exe),
+          ),
+        ]),
+      ),
+    );
     if (found.some((browser) => !browser)) {
       const registered = await readAppPaths(env);
-      return (await Promise.all(windowsChoices.map((b, i) =>
-        found[i] ?? first(b, registered[b.id] ?? []),
-      ))).filter(Boolean);
+      return (
+        await Promise.all(
+          windowsChoices.map(
+            (b, i) => found[i] ?? first(b, registered[b.id] ?? []),
+          ),
+        )
+      ).filter(Boolean);
     }
     return found;
   }
@@ -273,16 +300,24 @@ export async function launchIsolatedBrowser(
         throw Error("浏览器启动失败。");
       }),
     ]);
-    const input = child.stdio?.[3], output = child.stdio?.[4];
-    if (!input?.write || !output?.on || exited) throw Error("Missing browser pipes");
-    client = new PipeClient(input, output, { timeoutMs: platform === "win32" ? 10000 : 7000 });
+    const input = child.stdio?.[3],
+      output = child.stdio?.[4];
+    if (!input?.write || !output?.on || exited)
+      throw Error("Missing browser pipes");
+    client = new PipeClient(input, output, {
+      timeoutMs: platform === "win32" ? 10000 : 7000,
+    });
     const version = await client.send("Browser.getVersion");
-    if (typeof version.product !== "string" || !version.product) throw Error("Invalid browser handshake");
+    if (typeof version.product !== "string" || !version.product)
+      throw Error("Invalid browser handshake");
   } catch {
     try {
       await dispose();
     } catch {
-      throw Object.assign(failure(503, "独立窗口未能清理。请关闭这次打开的登录窗口再重试。"), { cleanupPending: true });
+      throw Object.assign(
+        failure(503, "独立窗口未能清理。请关闭这次打开的登录窗口再重试。"),
+        { cleanupPending: true },
+      );
     }
     throw failure(
       503,
@@ -329,9 +364,10 @@ export class BrowserLogin {
     importAccount,
     discover = availableBrowsers,
     launch = launchIsolatedBrowser,
-    protectProfile = (profile) => process.platform === "win32"
-      ? protectWindowsProfile(profile)
-      : chmod(profile, 0o700),
+    protectProfile = (profile) =>
+      process.platform === "win32"
+        ? protectWindowsProfile(profile)
+        : chmod(profile, 0o700),
     pollMs = 2000,
     ttlMs = 10 * 60_000,
     now = Date.now,
@@ -408,7 +444,10 @@ export class BrowserLogin {
   async prepare(session, browserId) {
     try {
       const browsers = await this.discover();
-      const candidates = browserId === undefined ? browsers : browsers.filter((b) => b.id === browserId);
+      const candidates =
+        browserId === undefined
+          ? browsers
+          : browsers.filter((b) => b.id === browserId);
       if (!candidates.length)
         throw failure(
           409,
@@ -426,7 +465,10 @@ export class BrowserLogin {
         try {
           await this.protectProfile(session.profile);
         } catch {
-          throw failure(503, "临时登录目录的权限设置未完成，请检查 Magpie 运行目录后重试。");
+          throw failure(
+            503,
+            "临时登录目录的权限设置未完成，请检查 Magpie 运行目录后重试。",
+          );
         }
         if (session.cancelled) return;
         try {
@@ -437,13 +479,23 @@ export class BrowserLogin {
             throw error;
           }
           last = error;
-          await rm(session.profile, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 });
+          await rm(session.profile, {
+            recursive: true,
+            force: true,
+            maxRetries: 4,
+            retryDelay: 150,
+          });
           session.profile = null;
           continue;
         }
         if (session.cancelled) return;
-        this.update(session, "waiting", "请在新打开的 " + browser.name +
-          " 窗口登录豆包。完成后会自动接入 Magpie，无需复制 Cookie。");
+        this.update(
+          session,
+          "waiting",
+          "请在新打开的 " +
+            browser.name +
+            " 窗口登录豆包。完成后会自动接入 Magpie，无需复制 Cookie。",
+        );
         this.schedule(session);
         return;
       }
@@ -499,6 +551,15 @@ export class BrowserLogin {
         .digest("hex");
       if (fingerprint !== session.stable) {
         session.stable = fingerprint;
+        this.schedule(session);
+        return;
+      }
+      if (session.context.manual && session.confirmed !== fingerprint) {
+        this.update(
+          session,
+          "awaiting_confirmation",
+          "已检测到登录。请先在独立窗口完成官网验证，再回到登录进度页点击“接入 Magpie”。",
+        );
         this.schedule(session);
         return;
       }
@@ -568,11 +629,14 @@ export class BrowserLogin {
           closed = false;
         }
       if (session.profile && closed)
-        await rm(session.profile, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 }).catch(
-          () => {
-            closed = false;
-          },
-        );
+        await rm(session.profile, {
+          recursive: true,
+          force: true,
+          maxRetries: 4,
+          retryDelay: 150,
+        }).catch(() => {
+          closed = false;
+        });
       if (!closed && this.current === session)
         this.state = {
           ...this.state,
@@ -583,6 +647,22 @@ export class BrowserLogin {
       if (this.current === session) this.current = null;
     })();
     return session.finishing;
+  }
+  async confirm(id) {
+    const session = this.current;
+    if (
+      !session ||
+      session.id !== id ||
+      !session.context.manual ||
+      this.state.state !== "awaiting_confirmation" ||
+      !session.stable
+    )
+      throw failure(409, "当前没有可以确认的独立登录，请等待登录检测完成。");
+    if (session.busy) throw failure(409, "正在检查登录状态，请稍后点击接入。");
+    session.confirmed = session.stable;
+    clearTimeout(session.timer);
+    await this.inspect(session);
+    return this.status();
   }
   async cancel({ shutdown = false } = {}) {
     const session = this.current;

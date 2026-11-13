@@ -159,3 +159,22 @@ test("原生插件开关即时生效：关闭工具桥和双重签到 opt-in", a
   assert.equal((await hooks.auth.checkin(async () => auth)).outcome, "done");
   assert.equal(claims, 1);
 });
+
+test("客户端只接收规范错误分类与数字上游码，不携带挑战内容", async () => {
+  const { vendorError } = await import("../protocol.mjs");
+  const e = vendorError(200, {
+    error_code: 710022004,
+    extra: {
+      decision: JSON.stringify({
+        type: "verify",
+        challenge: "FIXTURE_PRIVATE_CHALLENGE",
+      }),
+    },
+  });
+  const r = _internal.errorResponse(e),
+    body = await r.json();
+  assert.equal(r.status, 429);
+  assert.equal(body.error.code, "verification_required");
+  assert.equal(body.error.upstream_code, 710022004);
+  assert(!JSON.stringify(body).includes("FIXTURE_PRIVATE_CHALLENGE"));
+});

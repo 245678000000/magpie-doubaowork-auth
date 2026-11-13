@@ -7,6 +7,14 @@ import { createLoginManager } from "./login.mjs";
 import { createCheckin } from "./checkin.mjs";
 function errorResponse(error) {
   const status = Number(error?.status) || 502;
+  const reason = [
+    "verification_required",
+    "rate_limited",
+    "session_expired",
+    "upstream_error",
+  ].includes(error?.reason)
+    ? error.reason
+    : null;
   return new Response(
     JSON.stringify({
       error: {
@@ -14,7 +22,11 @@ function errorResponse(error) {
           ? error.message
           : "豆包工作插件请求未完成，请检查连接或重新登录。",
         type: status === 401 ? "authentication_error" : "provider_error",
-        code: status === 401 ? "session_expired" : "doubaowork_error",
+        code:
+          reason || (status === 401 ? "session_expired" : "doubaowork_error"),
+        ...(Number.isSafeInteger(error?.upstreamCode) && error.upstreamCode > 0
+          ? { upstream_code: error.upstreamCode }
+          : {}),
       },
     }),
     {

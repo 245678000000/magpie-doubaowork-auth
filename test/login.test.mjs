@@ -35,6 +35,8 @@ test("独立登录门户不回显 Cookie，取消与来源校验可靠，双开�
     const html = await fetch(flow.url);
     assert.equal(html.status, 200);
     assert.match(await html.text(), /独立浏览器/);
+    const { Script } = await import("node:vm");
+    new Script(await (await fetch(flow.url + "flow.js")).text());
     await assert.rejects(manager.start(), (e) => e.status === 409);
     assert.equal((await fetch(flow.url + "status")).status, 403);
     const status = await (
@@ -126,6 +128,75 @@ test("外层取消立即清理窗口，之后可以重新登录", async () => {
     await assert.rejects(fetch(flow.url));
     const next = await manager.start();
     assert(new URL(next.url).port);
+  } finally {
+    await manager.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("登录确认只允许同源 POST，确认前不读取或保存账号", async () => {
+  let identifies = 0;
+  class ManualBrowser extends FakeBrowser {
+    async start(_id, context) {
+      assert.equal(context.manual, true);
+      this.state = {
+        id: "FLOW_FIXTURE",
+        state: "awaiting_confirmation",
+        active: true,
+        message: "等待本人确认",
+      };
+    }
+    async confirm(id) {
+      assert.equal(id, "FLOW_FIXTURE");
+      await this.options.importAccount([
+        {
+          name: "sessionid",
+          value: "FIXTURE_COOKIE",
+          domain: ".doubao.com",
+          path: "/",
+        },
+      ]);
+      this.state = { state: "success", active: false, message: "已接入" };
+    }
+  }
+  const dir = await mkdtemp(join(tmpdir(), "dw-confirm-")),
+    manager = createLoginManager({
+      root: dir,
+      Browser: ManualBrowser,
+      metadata: async () => ({}),
+      api: {
+        identify: async (secret) => {
+          identifies++;
+          return { ...secret, userId: "FIXTURE_USER", name: "测试账号" };
+        },
+      },
+    });
+  try {
+    const flow = await manager.start(),
+      origin = new URL(flow.url).origin;
+    assert.equal(identifies, 0);
+    assert((await (await fetch(flow.url)).text()).includes("接入 Magpie"));
+    for (const headers of [
+      { "X-Doubao-Login": "1" },
+      { "X-Doubao-Login": "1", Origin: "https://foreign.test" },
+    ])
+      assert.equal(
+        (await fetch(flow.url + "confirm", { method: "POST", headers })).status,
+        403,
+      );
+    assert.equal(identifies, 0);
+    const result = flow.callback();
+    assert.equal(
+      (
+        await fetch(flow.url + "confirm", {
+          method: "POST",
+          headers: { "X-Doubao-Login": "1", Origin: origin },
+        })
+      ).status,
+      200,
+    );
+    assert.equal((await result).type, "success");
+    assert.equal(identifies, 1);
   } finally {
     await manager.dispose();
     await rm(dir, { recursive: true, force: true });
