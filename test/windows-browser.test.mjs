@@ -263,3 +263,21 @@ test("豆包的实际启动命令在首位注入内部开关，其余参数不�
   assert(!argv.some((a) => a.includes("--remote-debugging-port")));
   assert(killed);
 });
+
+test("非 Windows 平台显式选择豆包内置浏览器时立即返回 400", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dw-platform-"));
+  const flow = new BrowserLogin({
+    tmpRoot: root,
+    importAccount: async () => assert.fail("must not import"),
+    platform: "linux",
+  });
+  try {
+    await assert.rejects(
+      flow.start("doubao"),
+      (e) => e.status === 400 && /仅支持 Windows/.test(e.message),
+    );
+  } finally {
+    await flow.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
