@@ -508,3 +508,36 @@ test("登录接入携带浏览器页面自己的设备标识", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("关闭时迟到的设备标识回退状态不会把已取消的登录复活", async () => {
+  const started = deferred(),
+    release = deferred();
+  const f = await setup({
+    launch: async () => ({
+      cookies: async () => [cookie],
+      identity: async () => {
+        started.resolve();
+        await release.promise;
+        return {};
+      },
+      dispose: async () => {},
+    }),
+    importAccount: async () => assert.fail("must not import"),
+  });
+  try {
+    await f.login.start();
+    f.setCookies([cookie]);
+    await f.inspect();
+    const inspecting = f.inspect();
+    await started.promise;
+    const closing = f.login.dispose();
+    release.resolve();
+    await Promise.all([inspecting, closing]);
+    assert.equal(f.login.status().state, "cancelled");
+    assert.equal(f.login.status().active, false);
+    assert.doesNotMatch(f.login.status().message, /回退本机/);
+  } finally {
+    release.resolve();
+    await f.done();
+  }
+});

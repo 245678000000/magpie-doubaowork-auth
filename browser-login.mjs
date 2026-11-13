@@ -628,7 +628,11 @@ export class BrowserLogin {
       } catch {
         identity = {};
       }
-      if (identityMissing)
+      if (
+        identityMissing &&
+        this.current === session &&
+        !session.cancelled
+      )
         this.update(
           session,
           "importing",
