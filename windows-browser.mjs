@@ -36,14 +36,14 @@ export function windowsExecutable(value, exe) {
   return file && path.basename(file).toLowerCase() === exe ? file : null;
 }
 
-async function powershell(script, env, extra = {}) {
+async function powershell(script, env, extra = {}, timeoutMs = 10000) {
   const system = localPath(envValue(env, "SystemRoot")) ?? "C:\\Windows";
   const executable = path.join(system, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   return (await exec(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
     shell: false,
     env: { ...env, ...extra },
     windowsHide: true,
-    timeout: 4500,
+    timeout: timeoutMs,
     maxBuffer: 32 * 1024,
     encoding: "utf8",
   })).stdout.trim();
@@ -101,5 +101,7 @@ $acl = [System.IO.Directory]::GetAccessControl($p)
 $acl.SetSecurityDescriptorSddlForm(('D:P(A;OICI;FA;;;' + $me + ')(A;OICI;FA;;;SY)'), [System.Security.AccessControl.AccessControlSections]::Access)
 [System.IO.Directory]::SetAccessControl($p, $acl)
 [Console]::WriteLine('OK')`;
-  if (await powershell(script, process.env, { DW_TEMP_BROWSER_PROFILE: profile }) !== "OK") throw Error("Profile ACL not applied");
+  // Windows PowerShell's first launch can take several seconds while the
+  // runtime / Defender warms up. Still fail closed if ACL setup does not finish.
+  if (await powershell(script, process.env, { DW_TEMP_BROWSER_PROFILE: profile }, 20000) !== "OK") throw Error("Profile ACL not applied");
 }
