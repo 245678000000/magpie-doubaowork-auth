@@ -47,10 +47,9 @@ test("签到只提交一次，未知结果落盘，后续调用仅回查", async
     assert.equal((await run.run(s)).outcome, "failed");
     assert.equal(claims, 1);
     const { readdir } = await import("node:fs/promises");
-    assert.equal(
-      (await stat(join(root, (await readdir(root))[0]))).mode & 0o777,
-      0o600,
-    );
+    const info = await stat(join(root, (await readdir(root))[0]));
+    assert(info.isFile());
+    if (process.platform !== "win32") assert.equal(info.mode & 0o777, 0o600);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

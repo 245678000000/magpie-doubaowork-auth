@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, chmod, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, chmod, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID, createHash } from "node:crypto";
 import { once } from "node:events";
+import { win32 as winPath } from "node:path";
+import { envValue, windowsChoices, windowsInstallPaths, windowsExecutable, readWindowsAppPaths, protectWindowsProfile } from "./windows-browser.mjs";
 
 const LOGIN_URL = "https://www.doubao.com/chat/";
 const ACTIVE = new Set(["starting", "waiting", "importing"]);
@@ -16,7 +18,38 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function availableBrowsers(
   platform = process.platform,
   home = homedir(),
+  env = process.env,
+  {
+    usable = async (file) => (await stat(file)).isFile() &&
+      (platform === "win32" || (await access(file, constants.X_OK), true)),
+    readAppPaths = readWindowsAppPaths,
+  } = {},
 ) {
+  const works = (file) => Promise.resolve().then(() => usable(file)).catch(() => false);
+  if (platform === "win32") {
+    const roots = windowsInstallPaths(home, env);
+    const first = async (choice, candidates) => {
+      const seen = new Set();
+      for (const raw of candidates) {
+        const file = windowsExecutable(raw, choice.exe);
+        if (!file || seen.has(file.toLowerCase())) continue;
+        seen.add(file.toLowerCase());
+        if (await works(file)) return { id: choice.id, name: choice.name, path: file };
+      }
+      return null;
+    };
+    const found = await Promise.all(windowsChoices.map((b) => first(b, [
+      envValue(env, b.id === "chrome" ? "DW_CHROME_BIN" : "DW_EDGE_BIN"),
+      ...roots.map((root) => winPath.join(root, ...b.dir, "Application", b.exe)),
+    ])));
+    if (found.some((browser) => !browser)) {
+      const registered = await readAppPaths(env);
+      return (await Promise.all(windowsChoices.map((b, i) =>
+        found[i] ?? first(b, registered[b.id] ?? []),
+      ))).filter(Boolean);
+    }
+    return found;
+  }
   if (platform !== "darwin") return [];
   const choices = [
     ["chrome", "Google Chrome", "Google Chrome.app", "Google Chrome"],
@@ -26,12 +59,7 @@ export async function availableBrowsers(
   for (const [id, name, app, bin] of choices) {
     for (const apps of ["/Applications", join(home, "Applications")]) {
       const path = join(apps, app, "Contents/MacOS", bin);
-      if (
-        await access(path, constants.X_OK).then(
-          () => true,
-          () => false,
-        )
-      ) {
+      if (await works(path)) {
         result.push({ id, name, path });
         break;
       }
@@ -91,7 +119,7 @@ export function doubaoCookies(input, now = Date.now() / 1000) {
     ? rows
     : [];
 }
-export function browserArgs(profile) {
+export function browserArgs(profile, { blank = false } = {}) {
   return [
     "--remote-debugging-pipe",
     "--user-data-dir=" + profile,
@@ -99,7 +127,7 @@ export function browserArgs(profile) {
     "--no-default-browser-check",
     "--disable-background-mode",
     "--new-window",
-    LOGIN_URL,
+    blank ? "about:blank" : LOGIN_URL,
   ];
 }
 
@@ -198,30 +226,30 @@ export class PipeClient {
 export async function launchIsolatedBrowser(
   browser,
   profile,
-  { spawnProcess = spawn } = {},
+  { spawnProcess = spawn, platform = process.platform, blank = false } = {},
 ) {
-  const child = spawnProcess(browser.path, browserArgs(profile), {
+  const child = spawnProcess(browser.path, browserArgs(profile, { blank }), {
     stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
     shell: false,
     detached: false,
   });
-  const client = new PipeClient(child.stdio[3], child.stdio[4]);
+  let client;
   let exited = false;
   const exit = new Promise((resolve) => {
     child.once("exit", () => {
       exited = true;
-      client.close();
+      client?.close();
       resolve();
     });
     child.once("error", () => {
       exited = true;
-      client.close();
+      client?.close();
       resolve();
     });
   });
   let attachment = null;
   async function dispose() {
-    if (!exited && !client.closed)
+    if (!exited && client && !client.closed)
       await Promise.race([
         client.send("Browser.close").catch(() => {}),
         pause(700),
@@ -235,7 +263,7 @@ export async function launchIsolatedBrowser(
       child.kill("SIGKILL");
       await Promise.race([exit, pause(1200)]);
     }
-    client.close();
+    client?.close();
     if (!exited) throw Error("临时登录窗口仍在关闭，请稍后再试。");
   }
   try {
@@ -245,12 +273,22 @@ export async function launchIsolatedBrowser(
         throw Error("浏览器启动失败。");
       }),
     ]);
-    await client.send("Browser.getVersion");
+    const input = child.stdio?.[3], output = child.stdio?.[4];
+    if (!input?.write || !output?.on || exited) throw Error("Missing browser pipes");
+    client = new PipeClient(input, output, { timeoutMs: platform === "win32" ? 10000 : 7000 });
+    const version = await client.send("Browser.getVersion");
+    if (typeof version.product !== "string" || !version.product) throw Error("Invalid browser handshake");
   } catch {
-    await dispose();
+    try {
+      await dispose();
+    } catch {
+      throw Object.assign(failure(503, "独立窗口未能清理。请关闭这次打开的登录窗口再重试。"), { cleanupPending: true });
+    }
     throw failure(
       503,
-      "浏览器启动失败，请检查 Chrome / Edge 安装，或使用备用窗口。",
+      platform === "win32"
+        ? "已找到浏览器，但独立登录通信未建立。请更新 Magpie 和 Chrome / Edge；如受单位策略管理，请检查是否允许浏览器开发者工具。"
+        : "已找到浏览器，但独立窗口启动失败。请更新 Chrome / Edge 后重试。",
     );
   }
   return {
@@ -291,6 +329,9 @@ export class BrowserLogin {
     importAccount,
     discover = availableBrowsers,
     launch = launchIsolatedBrowser,
+    protectProfile = (profile) => process.platform === "win32"
+      ? protectWindowsProfile(profile)
+      : chmod(profile, 0o700),
     pollMs = 2000,
     ttlMs = 10 * 60_000,
     now = Date.now,
@@ -299,6 +340,7 @@ export class BrowserLogin {
     this.importAccount = importAccount;
     this.discover = discover;
     this.launch = launch;
+    this.protectProfile = protectProfile;
     this.pollMs = pollMs;
     this.ttlMs = ttlMs;
     this.now = now;
@@ -307,7 +349,7 @@ export class BrowserLogin {
     this.state = {
       id: "",
       state: "idle",
-      message: "在浏览器完成登录后，将自动接入本机网关。",
+      message: "在浏览器完成登录后，将自动接入 Magpie。",
       browserName: "",
       startedAt: 0,
       expiresAt: 0,
@@ -366,38 +408,53 @@ export class BrowserLogin {
   async prepare(session, browserId) {
     try {
       const browsers = await this.discover();
-      const browser =
-        browserId === undefined
-          ? browsers[0]
-          : browsers.find((b) => b.id === browserId);
-      if (!browser)
+      const candidates = browserId === undefined ? browsers : browsers.filter((b) => b.id === browserId);
+      if (!candidates.length)
         throw failure(
           409,
-          "未找到所选浏览器。请安装 Chrome / Edge，或使用备用独立窗口。",
+          browserId === undefined
+            ? "未检测到 Chrome 或 Edge。请安装其中一个后重试；Windows 自定义安装请查看插件 README。"
+            : "未检测到所选浏览器。请安装它，或在插件选项中恢复自动选择。",
         );
       if (session.cancelled) return;
-      this.state.browserName = browser.name;
       await mkdir(this.tmpRoot, { recursive: true, mode: 0o700 });
-      session.profile = await mkdtemp(join(this.tmpRoot, "doubao-login-"));
-      await chmod(session.profile, 0o700);
-      if (session.cancelled) return;
-      session.handle = await this.launch(browser, session.profile);
-      if (session.cancelled) return;
-      this.update(
-        session,
-        "waiting",
-        "请在新打开的 " +
-          browser.name +
-          " 窗口登录豆包。完成后会自动接入，无需复制 Cookie。",
-      );
-      this.schedule(session);
+      let last;
+      for (const browser of candidates) {
+        if (session.cancelled) return;
+        this.state.browserName = browser.name;
+        session.profile = await mkdtemp(join(this.tmpRoot, "doubao-login-"));
+        try {
+          await this.protectProfile(session.profile);
+        } catch {
+          throw failure(503, "临时登录目录的权限设置未完成，请检查 Magpie 运行目录后重试。");
+        }
+        if (session.cancelled) return;
+        try {
+          session.handle = await this.launch(browser, session.profile);
+        } catch (error) {
+          if (error?.cleanupPending) {
+            session.cleanupPending = true;
+            throw error;
+          }
+          last = error;
+          await rm(session.profile, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 });
+          session.profile = null;
+          continue;
+        }
+        if (session.cancelled) return;
+        this.update(session, "waiting", "请在新打开的 " + browser.name +
+          " 窗口登录豆包。完成后会自动接入 Magpie，无需复制 Cookie。");
+        this.schedule(session);
+        return;
+      }
+      throw last;
     } catch (error) {
       this.update(
         session,
         "error",
         error.status
           ? error.message
-          : "浏览器登录启动失败，请重试或使用备用窗口。",
+          : "浏览器登录启动失败，请检查桌面会话与 Chrome / Edge 安装。",
       );
       await this.finish(session);
     } finally {
@@ -503,7 +560,7 @@ export class BrowserLogin {
     clearTimeout(session.timer);
     session.stable = "";
     session.finishing = (async () => {
-      let closed = true;
+      let closed = !session.cleanupPending;
       if (session.handle)
         try {
           await session.handle.dispose();
@@ -511,7 +568,7 @@ export class BrowserLogin {
           closed = false;
         }
       if (session.profile && closed)
-        await rm(session.profile, { recursive: true, force: true }).catch(
+        await rm(session.profile, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 }).catch(
           () => {
             closed = false;
           },

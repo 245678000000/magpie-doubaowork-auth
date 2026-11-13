@@ -169,7 +169,10 @@ test("浏览器登录单实例；稳定会话只接入一次；清理临时资�
       f.login.start("chrome"),
     ]);
     assert.equal(a.id, b.id);
-    assert.equal((await stat(f.profile)).mode & 0o777, 0o700);
+    const profileInfo = await stat(f.profile);
+    assert(profileInfo.isDirectory());
+    if (process.platform !== "win32")
+      assert.equal(profileInfo.mode & 0o777, 0o700);
     assert.equal(f.login.status().state, "waiting");
     f.setCookies([cookie]);
     await f.inspect();
