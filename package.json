@@ -1,6 +1,6 @@
 {
   "name": "magpie-doubaowork-auth",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "豆包工作独立提供商：浏览器多账号登录、实时模型、额度和文本流式调用",
   "type": "module",
   "main": "./index.mjs",
@@ -16,7 +16,8 @@
     "LICENSE",
     "licenses",
     "test",
-    "scripts/windows-browser-smoke.mjs"
+    "scripts/windows-browser-smoke.mjs",
+    "scripts/doubao-browser-smoke.mjs"
   ],
   "engines": {
     "node": ">=22"
@@ -31,6 +32,7 @@
     "doubao",
     "doubao-work",
     "browser-login",
+    "doubao-browser",
     "multi-account"
   ],
   "license": "AGPL-3.0-only",
@@ -45,7 +47,7 @@
   },
   "scripts": {
     "test": "node --test",
-    "check": "node --check index.mjs && node --check protocol.mjs && node --check completion.mjs && node --check stream.mjs && node --check login.mjs && node --check checkin.mjs && node --check browser-login.mjs && node --check windows-browser.mjs && node --check scripts/windows-browser-smoke.mjs"
+    "check": "node --check index.mjs && node --check protocol.mjs && node --check completion.mjs && node --check stream.mjs && node --check login.mjs && node --check checkin.mjs && node --check browser-login.mjs && node --check windows-browser.mjs && node --check scripts/windows-browser-smoke.mjs && node --check scripts/doubao-browser-smoke.mjs"
   },
   "repository": {
     "type": "git",

@@ -27,10 +27,18 @@ magpie plugin add github:245678000000/magpie-doubaowork-auth
 ### Windows 提示找不到浏览器
 
 - 先在 Magpie **插件 → 已安装** 更新此插件，确认版本至少是 **0.1.1**，再重新发起登录。使用本地目录安装的用户需用新版目录替换旧文件并重载插件。
-- 自动检测用户与系统安装目录（包括 32 位及 64 位）和 Windows 注册表 App Paths。默认先尝试 Chrome，启动失败再尝试已检测到的 Edge；不读取日常浏览器配置。
-- 便携版或自定义路径且未注册到 App Paths，可在 Windows 的用户环境变量设置 `DW_CHROME_BIN` 或 `DW_EDGE_BIN` 为本机浏览器可执行文件的完整路径，例如 `D:\Apps\Chrome\chrome.exe`。退出并重新打开 Magpie，使其读取新环境变量。
+- 自动检测用户与系统安装目录（包括 32 位及 64 位）和 Windows 注册表 App Paths。默认顺序是 Chrome → Edge → 豆包内置浏览器，前一个启动失败再试下一个；不读取日常浏览器配置。
+- 便携版或自定义路径且未注册到 App Paths，可在 Windows 的用户环境变量设置 `DW_CHROME_BIN`、`DW_EDGE_BIN` 或 `DW_DOUBAO_BIN` 为本机浏览器可执行文件的完整路径，例如 `D:\Apps\Chrome\chrome.exe`。退出并重新打开 Magpie，使其读取新环境变量。
 - 若提示「已找到浏览器，但独立登录通信未建立」，这与找不到安装位置不同。请更新 Magpie 与浏览器；如果企业策略关闭了 DevTools，请联系管理员。
 - WSL 或远程 Linux 上运行的 Magpie 与 Windows 桌面版不同。请使用 Windows 桌面端发起登录。
+
+#### 没有 Chrome / Edge 时：使用豆包桌面端内置的 Chromium
+
+- 适用场景：本机只装了豆包桌面端，没有 Chrome / Edge（例如只用 Firefox / Zen）。豆包 147 起内置完整 Chromium，可直接作为独立登录浏览器。
+- 自动探测路径：`%LOCALAPPDATA%\Doubao\Application\app\Doubao.exe`。装在别的盘或自定义目录时，用 `DW_DOUBAO_BIN` 指向该文件，然后重启 Magpie。
+- **不要**指向同目录的 `Doubao_browser_proxy.exe`：它只是转发器，会把继承的 CDP 匿名管道传给子进程时断开，表现为「已找到浏览器，但独立登录通信未建立」。必须指向 `Doubao.exe` 本身。
+- 启动时会为豆包附加 `--saman-browser-entry`（豆包内部开关，把桌面端切换成浏览器进程）；其余参数与 Chrome / Edge 完全一致，仍走匿名管道，不开放调试端口。这是 best-effort：厂商改版可能改变或移除该开关，届时握手会明确失败，请回退到 Chrome / Edge。
+- 隐私边界不变：仍使用全新临时资料目录（`%TEMP%\doubao-login-*`，当前用户与 SYSTEM 的 ACL），不读取 `%LOCALAPPDATA%\Doubao\User Data`，不修改豆包安装目录；客户端按自身策略下载的组件留在该临时目录，登录结束即清理。
 
 ### 从本地目录安装
 
@@ -47,7 +55,7 @@ magpie plugin add /绝对路径/magpie-doubaowork-auth
 ```
 
 1. 在 Magpie **供应商 → 添加供应商** 中，选择 **豆包工作 · 独立版**。
-2. 在新打开的独立 Chrome / Edge 窗口，亲自完成扫码或手机验证。
+2. 在新打开的独立 Chrome / Edge / 豆包内置浏览器窗口，亲自完成扫码或手机验证。
 3. 在独立窗口完成登录及官网提示的人工验证，然后回到进度页点击 **接入 Magpie**。确认之前不保存账号，也不自动关闭窗口；核验后保存账号并加载模型。
 4. 添加下一个账号时，再次选择同一提供商。每次使用全新的临时浏览器资料，日常浏览器登录保持原样。
 
@@ -101,7 +109,7 @@ GitHub：[245678000000/magpie-doubaowork-auth](https://github.com/245678000000/m
 
 签到账本按北京时间分日，写入领取前创建跨宿主原子保留记录，适配 Magpie 应用与 CLI 同时运行。出现网络中断、人工验证或未确认状态时，不自动重复提交。保留记录需要人工核对时，先检查豆包官方页面，不要盲目删除账本重试。签到领取尚未进行真实在线验收。
 
-高级启动参数可通过插件 JSON options 设置：`browser: "chrome" | "edge"`、`contextLimit`、`outputLimit`。原生布尔开关由 Magpie 保存并实时读取。
+高级启动参数可通过插件 JSON options 设置：`browser: "chrome" | "edge" | "doubao"`、`contextLimit`、`outputLimit`。原生布尔开关由 Magpie 保存并实时读取。
 
 ## 会话与隐私
 

@@ -152,7 +152,7 @@ function createHooks(input = {}, options = {}, dependencies = {}) {
           async authorize(_inputs, { signal } = {}) {
             return login.start({
               signal,
-              browserId: ["chrome", "edge"].includes(options.browser)
+              browserId: ["chrome", "edge", "doubao"].includes(options.browser)
                 ? options.browser
                 : undefined,
             });
