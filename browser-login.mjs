@@ -278,6 +278,17 @@ export class PipeClient {
   }
 }
 
+// Fixed labels only: never print exception text, URLs, profiles or payloads.
+export function browserSmokeFailure(error, transport) {
+  const reason = new Map([
+    ["浏览器响应超时。", "command_timeout"],
+    ["浏览器连接超时。", "socket_timeout"],
+    ["临时浏览器端口等待超时。", "port_file_timeout"],
+    ["浏览器登录窗口已断开。", "closed"],
+  ]).get(error?.message) || "failed";
+  return `Blank-browser handshake (${transport === "port" ? "port" : "pipe"}): ${reason}`;
+}
+
 export async function launchIsolatedBrowser(
   browser,
   profile,
@@ -374,9 +385,7 @@ export async function launchIsolatedBrowser(
     // keep the shorter deadline. This does not retry login or upstream requests.
     client.timeoutMs = platform === "win32" ? 10000 : 7000;
   } catch (cause) {
-    if (blank) console.error("Blank-browser handshake:",
-      cause?.message === "浏览器响应超时。" ? "timeout" :
-      cause?.message === "浏览器登录窗口已断开。" ? "closed" : "failed");
+    if (blank) console.error(browserSmokeFailure(cause, transport));
     try {
       await dispose();
     } catch {

@@ -6,7 +6,7 @@
 
 专为 **豆包工作** 制作的轻量提供商插件。账号、模型、调用和额度直接集成到 Magpie；不需要启动旧版账号管家、反代网关、Agent2API 或云服务器。无运行时 npm 依赖。
 
-> 非官方社区适配，使用豆包工作现有登录会话，不是官方 OAuth / API。上游接口和账号可用性可能变化。**v0.1.5** 支持 Windows / macOS / Linux 图形会话，默认 Chrome / Edge；另含 Chromium 与 Windows 豆包内置浏览器支持。
+> 非官方社区适配，使用豆包工作现有登录会话，不是官方 OAuth / API。上游接口和账号可用性可能变化。当前 **v0.1.6** 支持 Windows / macOS / Linux 图形会话，默认 Chrome / Edge；另含 Chromium 与 Windows 豆包内置浏览器支持。
 
 ## 安装与登录
 
