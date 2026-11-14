@@ -3,6 +3,8 @@ import { readFile, mkdir, open, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { fail } from "./protocol.mjs";
+// 活动组常量：网页会话的 launch 经常下发空串，此时用它在服务端再试一次。
+export const FALLBACK_GROUP = "pc_incentive_task_mvp_v3";
 const day = () =>
   new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Shanghai",
@@ -87,6 +89,38 @@ export function createCheckin({ root, api, clock = day } = {}) {
       { signal },
     );
   }
+  // 前端 DailyCheckIn 只发 {scene}，成功判据是 data.checked_in。
+  async function signIn(secret, group, signal) {
+    const r = await api.post(
+      secret,
+      "/alice/ug/campaign/landing/checkin",
+      { scene: group },
+      { signal },
+    );
+    const d = r?.data || {},
+      streak = Number(d.continuous_days) || undefined,
+      credit = Number(d.reward_amount) || undefined;
+    return {
+      checked: d.checked_in === true || Number(d.continuous_days) > 0,
+      streak,
+      credit,
+      message: typeof r?.msg === "string" ? r.msg : "",
+    };
+  }
+  // 把「没拿到活动组」和「上游拒绝」分开说清楚，别让用户以为是账号没资格。
+  function reason(error, fallback, group) {
+    const detail =
+      typeof error?.message === "string" && error.message
+        ? "（" + error.message.slice(0, 120) + "）"
+        : "";
+    return fallback
+      ? "豆包未放行网页端签到" +
+          detail +
+          "；launch 未下发活动组，已用 " +
+          group +
+          " 兜底重试，签到可能只能在豆包电脑版内完成"
+      : "豆包未放行网页端签到" + detail;
+  }
   async function run(secret, { signal } = {}) {
     const key = createHash("sha256")
         .update(secret.userId + ":" + (secret.enterpriseType || "0"))
@@ -112,16 +146,49 @@ export function createCheckin({ root, api, clock = day } = {}) {
       );
       group = launch.data?.ug_campaign_info?.campaign_group_code;
     }
-    if (typeof group !== "string" || !group)
-      return { outcome: "inactive", message: "当前账号未开放每日签到。" };
-    const tasks = dailyTasks(await detail(secret, group, signal), group);
-    if (tasks.length !== 1)
+    // launch 里的 campaign_group_code 在网页会话下经常是空串。
+    // 直接判「未开放」会把上游真实原因盖掉，所以先落到常量上再试。
+    let fallback = false;
+    if (typeof group !== "string" || !group) {
+      group = FALLBACK_GROUP;
+      fallback = true;
+    }
+    let tasks = [],
+      detailError;
+    try {
+      tasks = dailyTasks(await detail(secret, group, signal), group);
+    } catch (e) {
+      if (e.signIn) throw e;
+      detailError = e;
+    }
+    if (tasks.length !== 1) {
+      // v3/detail 与 campaign/list 在网页会话下都拿不到任务列表，
+      // 但前端侧栏卡片签到只提交 {scene}，不依赖任务列表，直接走同一条路径。
+      let direct;
+      try {
+        direct = await signIn(secret, group, signal);
+      } catch (e) {
+        if (e.signIn) throw e;
+        return { outcome: "inactive", message: reason(e, fallback, group) };
+      }
+      if (direct.checked) {
+        await atomic(path, { day: today, group, item: "daily_signin", confirmed: true });
+        return {
+          outcome: "done",
+          ...(direct.streak ? { streak: direct.streak } : {}),
+          ...(direct.credit ? { credit: direct.credit } : {}),
+          message: fallback
+            ? "已通过签到接口确认，活动组取自常量。"
+            : "今日签到已由上游确认。",
+        };
+      }
       return {
         outcome: "inactive",
-        message: tasks.length
-          ? "每日任务不唯一，未提交领取。"
-          : "当前活动未下发每日签到任务。",
+        message:
+          reason(detailError, fallback, group) +
+          (direct.message ? "；上游回执：" + direct.message.slice(0, 80) : ""),
       };
+    }
     const task = tasks[0];
     if (task.checked) {
       await atomic(path, {
