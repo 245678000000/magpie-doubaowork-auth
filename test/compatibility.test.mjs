@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { mkdtemp, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
-import { availableBrowsers, browserArgs, launchIsolatedBrowser, IDENTITY_EXPRESSION } from "../browser-login.mjs";
+import { availableBrowsers, browserArgs, launchIsolatedBrowser, browserSmokeFailure, IDENTITY_EXPRESSION } from "../browser-login.mjs";
 import { checkLinuxEnvironment } from "../posix-browser.mjs";
 import { devToolsAddress, waitDevToolsAddress, SocketClient } from "../cdp-port.mjs";
 
@@ -149,4 +150,39 @@ test("a wrapper widening the listener is closed after private-profile verificati
     spawnProcess: () => { const child = new EventEmitter(); queueMicrotask(() => { child.emit("spawn"); child.emit("exit", 0); }); return child; },
   }), (error) => error.status === 503 && !error.cleanupPending);
   assert.deepEqual(calls, ["Browser.getBrowserCommandLine", "Browser.close", "disconnect"]);
+});
+
+
+test("cold browser startup has a separate bounded grace, normal commands retain their shorter deadline", async () => {
+  const child = new EventEmitter();
+  child.stdio = [null, null, null, new PassThrough(), new PassThrough()];
+  child.kill = () => assert.fail("Browser.close should exit the fixture");
+  let client;
+  class Pipe {
+    constructor(_input, _output, options) { client = this; this.timeoutMs = options.timeoutMs; assert.equal(this.timeoutMs, 15000); }
+    async send(method) {
+      if (method === "Browser.getVersion") { assert.equal(this.timeoutMs, 15000); return { product: "Chrome/fixture" }; }
+      assert.equal(this.timeoutMs, 7000);
+      if (method === "Target.getTargets") return { targetInfos: [{ type: "page", targetId: "fixture", url: "about:blank" }] };
+      if (method === "Browser.close") child.emit("exit", 0);
+      return {};
+    }
+    close() { this.closed = true; }
+  }
+  const handle = await launchIsolatedBrowser({ id: "chrome", path: "/fixture/chrome" }, "/fixture/profile", {
+    platform: "linux", env: { DISPLAY: ":99" }, uid: 1000, PipeClientImpl: Pipe,
+    spawnProcess: () => { queueMicrotask(() => child.emit("spawn")); return child; },
+  });
+  assert.equal(client.timeoutMs, 7000);
+  assert.deepEqual(await handle.cookies(), []);
+  await handle.dispose();
+  assert(client.closed);
+});
+
+
+test("blank smoke diagnostics distinguish startup timeout phases without printing exception data", () => {
+  for (const [message, reason] of [["浏览器响应超时。", "command_timeout"], ["浏览器连接超时。", "socket_timeout"], ["临时浏览器端口等待超时。", "port_file_timeout"], ["浏览器登录窗口已断开。", "closed"], ["SENSITIVE_PAYLOAD", "failed"], ["__proto__", "failed"]]) {
+    for (const mode of ["pipe", "port"])
+      assert.equal(browserSmokeFailure(Error(message), mode), `Blank-browser handshake (${mode}): ${reason}`);
+  }
 });

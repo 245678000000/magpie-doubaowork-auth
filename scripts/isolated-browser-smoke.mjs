@@ -17,6 +17,7 @@ for (const id of process.platform === "win32" ? ["chrome", "edge"] : ["chrome"])
     try {
       if (process.platform === "win32") await protectWindowsProfile(profile);
       else await chmod(profile, 0o700);
+      console.log(`Starting ${process.platform} ${browser.name} ${transport} (blank private profile)`);
       handle = await launchIsolatedBrowser(browser, profile, { blank: true, transport });
       assert.deepEqual(await handle.cookies(), []);
       assert.deepEqual(await handle.identity(), {});
