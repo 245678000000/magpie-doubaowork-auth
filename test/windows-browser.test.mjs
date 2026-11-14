@@ -210,6 +210,7 @@ test("指定 doubao 时只启动豆包，不回落 Chrome / Edge", async () => {
   const tried = [];
   const flow = new BrowserLogin({
     tmpRoot: root,
+    platform: "win32",
     importAccount: async () => assert.fail("must not import"),
     discover: async () => [
       { id: "chrome", name: "Chrome", path: chrome },

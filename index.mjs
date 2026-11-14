@@ -129,6 +129,13 @@ function createHooks(input = {}, options = {}, dependencies = {}) {
       maxConcurrency: 1,
       options: [
         {
+          key: "browser_loopback",
+          label: "本机随机端口兼容登录",
+          description: "默认关闭，使用匿名管道。仅 Chrome++ 等转发器丢失管道时开启；在独立临时目录启动本机随机调试端口，登录结束即关闭。",
+          confirm: "开启后，登录期间本机其他进程可能访问临时浏览器的调试端口。仅使用新建临时资料，不连接日常浏览器。",
+          default: false,
+        },
+        {
           key: "prompt_tools",
           label: "实验性客户端工具桥",
           description:
@@ -152,7 +159,8 @@ function createHooks(input = {}, options = {}, dependencies = {}) {
           async authorize(_inputs, { signal } = {}) {
             return login.start({
               signal,
-              browserId: ["chrome", "edge", "doubao"].includes(options.browser)
+              transport: flag("browser_loopback", false) ? "port" : "pipe",
+              browserId: ["chrome", "edge", "doubao", "chromium"].includes(options.browser)
                 ? options.browser
                 : undefined,
             });

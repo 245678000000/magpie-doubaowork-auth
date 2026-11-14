@@ -273,7 +273,9 @@ export async function deviceMetadata({
             "User Data",
           ),
         ]
-      : [join(home, "Library", "Application Support", "DoubaoWork")];
+      : platform === "linux"
+        ? [join(env.XDG_CONFIG_HOME || join(home, ".config"), "DoubaoWork")]
+        : [join(home, "Library", "Application Support", "DoubaoWork")];
   for (const base of roots) {
     try {
       const p = join(base, "Local State");
