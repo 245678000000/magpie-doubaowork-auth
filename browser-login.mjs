@@ -16,6 +16,42 @@ import {
 } from "./windows-browser.mjs";
 
 const LOGIN_URL = "https://www.doubao.com/chat/";
+// The web session keeps its own device and web identifiers in localStorage and
+// sends them on every completion request. Read the same values back after login
+// instead of guessing them; the expression is fixed and never interpolated.
+const IDENTITY_EXPRESSION = `(function(){try{var w=JSON.parse(localStorage.getItem("samantha_web_web_id")||"{}"),d=JSON.parse(localStorage.getItem("client_device_info")||"{}");return JSON.stringify({webId:w.web_id||"",deviceId:d.deviceId||"",clientVersion:d.clientVersion||"",chromiumVersion:d.chromiumVersion||"",channel:d.appChannel||d.channel||"",userAgent:d.userAgent||""})}catch(e){return "{}"}})()`;
+const identityField = (value, max) =>
+  typeof value === "string" &&
+  value.length > 0 &&
+  value.length <= max &&
+  !/[\x00-\x1f\x7f]/.test(value)
+    ? value
+    : "";
+export function sessionIdentity(raw) {
+  let value = raw;
+  if (typeof raw === "string") {
+    if (raw.length > 4096) return {};
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out = {};
+  for (const [key, max, pattern] of [
+    ["deviceId", 64, /^[a-zA-Z0-9_-]{1,64}$/],
+    ["webId", 64, /^[a-zA-Z0-9_-]{1,64}$/],
+    ["clientVersion", 32],
+    ["chromiumVersion", 32],
+    ["channel", 32],
+    ["userAgent", 256],
+  ]) {
+    const text = identityField(value[key], max);
+    if (text && (!pattern || pattern.test(text))) out[key] = text;
+  }
+  return out;
+}
 const ACTIVE = new Set([
   "starting",
   "waiting",
@@ -333,32 +369,47 @@ export async function launchIsolatedBrowser(
         : "已找到浏览器，但独立登录通信未建立。请更新 Magpie 和 Chrome / Edge；如受单位策略管理，请检查是否允许浏览器开发者工具。",
     );
   }
+  async function pageSession() {
+    const { targetInfos = [] } = await client.send("Target.getTargets");
+    const pages = targetInfos.filter((p) => p.type === "page");
+    if (!pages.length) throw Error("登录窗口已关闭。");
+    const page = pages.find((p) => isDoubaoPage(p.url));
+    if (!page) return null;
+    if (attachment?.targetId !== page.targetId) {
+      if (attachment)
+        await client
+          .send("Target.detachFromTarget", {
+            sessionId: attachment.sessionId,
+          })
+          .catch(() => {});
+      const { sessionId } = await client.send("Target.attachToTarget", {
+        targetId: page.targetId,
+        flatten: true,
+      });
+      attachment = { targetId: page.targetId, sessionId };
+    }
+    return attachment.sessionId;
+  }
   return {
     async cookies() {
-      const { targetInfos = [] } = await client.send("Target.getTargets");
-      const pages = targetInfos.filter((p) => p.type === "page");
-      if (!pages.length) throw Error("登录窗口已关闭。");
-      const page = pages.find((p) => isDoubaoPage(p.url));
-      if (!page) return [];
-      if (attachment?.targetId !== page.targetId) {
-        if (attachment)
-          await client
-            .send("Target.detachFromTarget", {
-              sessionId: attachment.sessionId,
-            })
-            .catch(() => {});
-        const { sessionId } = await client.send("Target.attachToTarget", {
-          targetId: page.targetId,
-          flatten: true,
-        });
-        attachment = { targetId: page.targetId, sessionId };
-      }
+      const sessionId = await pageSession();
+      if (!sessionId) return [];
       const { cookies = [] } = await client.send(
         "Network.getCookies",
         { urls: [LOGIN_URL] },
-        attachment.sessionId,
+        sessionId,
       );
       return cookies;
+    },
+    async identity() {
+      const sessionId = await pageSession();
+      if (!sessionId) return {};
+      const { result } = await client.send(
+        "Runtime.evaluate",
+        { expression: IDENTITY_EXPRESSION, returnByValue: true },
+        sessionId,
+      );
+      return sessionIdentity(result?.value);
     },
     dispose,
   };
@@ -585,9 +636,32 @@ export class BrowserLogin {
         "检测到豆包登录，正在核验账号并保存到本机…",
       );
       // Exactly one import attempt. A timeout is uncertain, not a reason to retry silently.
+      let identity = {},
+        identityMissing = true;
+      try {
+        identity = (await session.handle.identity?.()) || {};
+        identityMissing = !(identity.deviceId && identity.webId);
+      } catch {
+        identity = {};
+      }
+      if (
+        identityMissing &&
+        this.current === session &&
+        !session.cancelled
+      )
+        this.update(
+          session,
+          "importing",
+          "未从浏览器读取到完整的设备标识，正在回退本机客户端 Local State…",
+          { identityMissing: true },
+        );
+      if (this.current !== session || session.cancelled) return;
       let result;
       try {
-        result = await this.importAccount(cookies, session.context);
+        result = await this.importAccount(cookies, {
+          ...session.context,
+          identity,
+        });
       } catch {
         this.update(
           session,
@@ -618,6 +692,7 @@ export class BrowserLogin {
           updated: result.updated,
           cloudSynced: result.cloudSynced === true,
           cloudOrigin: result.cloudOrigin || "",
+          identityMissing,
         },
       );
       await this.finish(session);

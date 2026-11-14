@@ -1,6 +1,6 @@
 {
   "name": "magpie-doubaowork-auth",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "豆包工作独立提供商：浏览器多账号登录、实时模型、额度和文本流式调用",
   "type": "module",
   "main": "./index.mjs",
