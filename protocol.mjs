@@ -432,10 +432,10 @@ export function quotaView(value, entry = {}) {
       name: name.trim(),
       ...(unlimited
         ? { display: "不限", aside: true }
-        : used !== undefined
-          ? { used }
-          : amount !== undefined && limit !== undefined
-            ? { amount, limit, unit: "额度" }
+        : amount !== undefined && limit !== undefined
+          ? { amount, limit, ...(used !== undefined ? { used } : {}), unit: "额度" }
+          : used !== undefined
+            ? { used }
             : { display: "额度未返回" }),
       ...(reset ? { resetsAt: reset } : {}),
       ...(type === 1 ? { span: 18000 } : type === 2 ? { span: 604800 } : {}),
@@ -468,6 +468,32 @@ export function quotaView(value, entry = {}) {
     d.current_subscription?.display?.short_name ||
     "";
   return { ...(plan ? { plan: clean(plan) } : {}), windows };
+}
+const CARD_NAMES = {
+  quota_reset_card: "额度重置卡",
+  pc_quota_reset_card: "PC 额度重置卡",
+};
+export function cardWindow(card = {}) {
+  const key = clean(card.card_key || card.activity_id || "活动赠送"),
+    source = clean(card.source_display_text || "活动赠送"),
+    balance = Number(card.track_params?.card_balance),
+    expire = Number(card.expire_time),
+    left = Number.isFinite(balance) && balance >= 0 ? balance : undefined,
+    until = expire > 0 ? new Date(expire) : null,
+    day =
+      until && !Number.isNaN(until.getTime())
+        ? until.getMonth() + 1 + "/" + until.getDate()
+        : "",
+    parts = [source];
+  if (left !== undefined) parts.push("剩 " + left + " 次");
+  if (day) parts.push(day + " 到期");
+  if (card.usable_on_current_device === false) parts.push("当前设备不可用");
+  return {
+    name: CARD_NAMES[key] || key,
+    ...(left !== undefined ? { balance: left } : {}),
+    display: parts.join(" · "),
+    ...(expire > 0 ? { runsOutAt: expire } : {}),
+  };
 }
 export function createApi({ fetchImpl = fetch } = {}) {
   const cache = new Map(),
@@ -620,7 +646,25 @@ export function createApi({ fetchImpl = fetch } = {}) {
       } catch (e) {
         if (e.signIn) throw e;
       }
-      return { ...quotaView(overview, entry), user: s.name || s.userId };
+      const view = { ...quotaView(overview, entry), user: s.name || s.userId };
+      // 活动赠送的额度以「卡」的形式下发（额度重置卡等），不在 overview 里。
+      // 不读这里，免费体验账号永远只有空窗口。
+      let granted = [];
+      try {
+        granted = await request(
+          s,
+          "/alice/commerce/marketing/card/list/",
+          { status_in: [1, 2, 3, 4], with_limit_status: true },
+          { signal },
+        );
+      } catch (e) {
+        if (e.signIn) throw e;
+      }
+      const cards = Array.isArray(granted?.data?.cards) ? granted.data.cards : [];
+      for (const card of cards) view.windows.push(cardWindow(card));
+      if (granted?.data?.limit_status?.is_limited === true)
+        view.rateLimited = true;
+      return view;
     },
   };
 }
