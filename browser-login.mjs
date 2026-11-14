@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { posixBrowsers, checkLinuxEnvironment } from "./posix-browser.mjs";
+import { SocketClient, waitDevToolsAddress } from "./cdp-port.mjs";
 import { access, mkdir, mkdtemp, chmod, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join } from "node:path";
@@ -16,6 +18,42 @@ import {
 } from "./windows-browser.mjs";
 
 const LOGIN_URL = "https://www.doubao.com/chat/";
+// The web session keeps its own device and web identifiers in localStorage and
+// sends them on every completion request. Read the same values back after login
+// instead of guessing them; the expression is fixed and never interpolated.
+export const IDENTITY_EXPRESSION = `(function(){if(location.protocol!=="https:"||!["doubao.com","www.doubao.com"].includes(location.hostname)||(location.port&&location.port!=="443"))return "{}";function read(key){try{return JSON.parse(localStorage.getItem(key)||"{}")||{}}catch(e){return {}}}var w=read("samantha_web_web_id"),d=read("client_device_info");return JSON.stringify({webId:w.web_id||"",deviceId:d.deviceId||"",clientVersion:d.clientVersion||"",chromiumVersion:d.chromiumVersion||"",channel:d.appChannel||d.channel||"",userAgent:d.userAgent||""})})()`;
+const identityField = (value, max) =>
+  typeof value === "string" &&
+  value.length > 0 &&
+  value.length <= max &&
+  !/[\x00-\x1f\x7f]/.test(value)
+    ? value
+    : "";
+export function sessionIdentity(raw) {
+  let value = raw;
+  if (typeof raw === "string") {
+    if (raw.length > 4096) return {};
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out = {};
+  for (const [key, max, pattern] of [
+    ["deviceId", 64, /^[a-zA-Z0-9_-]{1,64}$/],
+    ["webId", 64, /^[a-zA-Z0-9_-]{1,64}$/],
+    ["clientVersion", 32],
+    ["chromiumVersion", 32],
+    ["channel", 32],
+    ["userAgent", 256],
+  ]) {
+    const text = identityField(value[key], max);
+    if (text && (!pattern || pattern.test(text))) out[key] = text;
+  }
+  return out;
+}
 const ACTIVE = new Set([
   "starting",
   "waiting",
@@ -58,14 +96,12 @@ export async function availableBrowsers(
     const found = await Promise.all(
       windowsChoices.map((b) =>
         first(b, [
-          envValue(env, b.id === "chrome" ? "DW_CHROME_BIN" : "DW_EDGE_BIN"),
-          ...roots.map((root) =>
-            winPath.join(root, ...b.dir, "Application", b.exe),
-          ),
+          envValue(env, b.env),
+          ...roots.map((root) => winPath.join(root, ...b.dir, b.exe)),
         ]),
       ),
     );
-    if (found.some((browser) => !browser)) {
+    if (found.some((browser, i) => !browser && windowsChoices[i].appPaths)) {
       const registered = await readAppPaths(env);
       return (
         await Promise.all(
@@ -75,24 +111,9 @@ export async function availableBrowsers(
         )
       ).filter(Boolean);
     }
-    return found;
+    return found.filter(Boolean);
   }
-  if (platform !== "darwin") return [];
-  const choices = [
-    ["chrome", "Google Chrome", "Google Chrome.app", "Google Chrome"],
-    ["edge", "Microsoft Edge", "Microsoft Edge.app", "Microsoft Edge"],
-  ];
-  const result = [];
-  for (const [id, name, app, bin] of choices) {
-    for (const apps of ["/Applications", join(home, "Applications")]) {
-      const path = join(apps, app, "Contents/MacOS", bin);
-      if (await works(path)) {
-        result.push({ id, name, path });
-        break;
-      }
-    }
-  }
-  return result;
+  return posixBrowsers(platform, home, env, works);
 }
 export function isDoubaoPage(raw) {
   try {
@@ -146,8 +167,8 @@ export function doubaoCookies(input, now = Date.now() / 1000) {
     ? rows
     : [];
 }
-export function browserArgs(profile, { blank = false } = {}) {
-  return [
+export function browserArgs(profile, { blank = false, id = "", transport = "pipe" } = {}) {
+  const args = [
     "--remote-debugging-pipe",
     "--user-data-dir=" + profile,
     "--no-first-run",
@@ -156,6 +177,13 @@ export function browserArgs(profile, { blank = false } = {}) {
     "--new-window",
     blank ? "about:blank" : LOGIN_URL,
   ];
+  if (transport === "port") args.splice(0, 1,
+    "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", "--enable-automation");
+  // Doubao.exe is the desktop client; --saman-browser-entry is what turns it into
+  // the embedded Chromium browser. Documented as best-effort: a vendor rename or
+  // flag change makes the handshake fail loudly instead of silently reusing the app.
+  if (id === "doubao") args.unshift("--saman-browser-entry");
+  return args;
 }
 
 // CDP over inherited anonymous pipes (fd 3/4), not a listening debugging port.
@@ -253,30 +281,47 @@ export class PipeClient {
 export async function launchIsolatedBrowser(
   browser,
   profile,
-  { spawnProcess = spawn, platform = process.platform, blank = false } = {},
+  { spawnProcess = spawn, platform = process.platform, blank = false,
+    transport = "pipe", env = process.env, uid = process.getuid?.(),
+    portAddress = waitDevToolsAddress, PortClient = SocketClient } = {},
 ) {
-  const child = spawnProcess(browser.path, browserArgs(profile, { blank }), {
-    stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
-    shell: false,
-    detached: false,
-  });
+  if (!["pipe", "port"].includes(transport)) throw failure(400, "浏览器通信选项无效。");
+  if (platform === "linux") {
+    try { checkLinuxEnvironment({ env, uid }); }
+    catch (error) { throw failure(409, error.message); }
+  }
+  const portMode = transport === "port";
+  let verifiedProfile = !portMode;
+  const child = spawnProcess(
+    browser.path,
+    browserArgs(profile, { blank, id: browser.id, transport }),
+    {
+      stdio: portMode ? ["ignore", "ignore", "ignore"] : ["ignore", "ignore", "ignore", "pipe", "pipe"],
+      shell: false,
+      detached: false,
+    },
+  );
   let client;
-  let exited = false;
+  let exited = false, started = false;
   const exit = new Promise((resolve) => {
     child.once("exit", () => {
       exited = true;
-      client?.close();
+      if (!portMode) client?.close();
       resolve();
     });
     child.once("error", () => {
       exited = true;
-      client?.close();
+      if (!portMode) client?.close();
       resolve();
     });
   });
   let attachment = null;
   async function dispose() {
-    if (!exited && client && !client.closed)
+    if (portMode && started && !verifiedProfile) {
+      client?.close();
+      throw Error("临时资料目录核验未完成，请手动关闭本次窗口后重试。");
+    }
+    if ((portMode || !exited) && client && !client.closed)
       await Promise.race([
         client.send("Browser.close").catch(() => {}),
         pause(700),
@@ -290,23 +335,38 @@ export async function launchIsolatedBrowser(
       child.kill("SIGKILL");
       await Promise.race([exit, pause(1200)]);
     }
+    if (portMode && client && !client.socketClosed)
+      await Promise.race([client.disconnected, pause(1200)]);
+    const socketClosed = !portMode || !client || client.socketClosed;
     client?.close();
-    if (!exited) throw Error("临时登录窗口仍在关闭，请稍后再试。");
+    if (!socketClosed || !exited) throw Error("临时登录窗口仍在关闭，请稍后再试。");
   }
   try {
-    await Promise.race([
-      once(child, "spawn"),
-      exit.then(() => {
-        throw Error("浏览器启动失败。");
-      }),
-    ]);
-    const input = child.stdio?.[3],
-      output = child.stdio?.[4];
-    if (!input?.write || !output?.on || exited)
-      throw Error("Missing browser pipes");
-    client = new PipeClient(input, output, {
-      timeoutMs: platform === "win32" ? 10000 : 7000,
-    });
+    // `spawn` precedes normal exit; a short-lived forwarding parent is valid
+    // in explicit port mode. The events.once promise already rejects on error.
+    await once(child, "spawn");
+    started = true;
+    if (portMode) {
+      client = new PortClient(await portAddress(profile), {
+        timeoutMs: platform === "win32" ? 10000 : 7000,
+      });
+      await client.ready;
+      const { arguments: args = [] } = await client.send("Browser.getBrowserCommandLine");
+      // A wrapper can override user-data-dir; never close or read that browser.
+      if (!Array.isArray(args) || args.filter((arg) => typeof arg === "string" && arg.startsWith("--user-data-dir=")).length !== 1 ||
+          !args.includes("--user-data-dir=" + profile) || args.includes("--user-data-dir")) throw Error("Browser profile mismatch");
+      verifiedProfile = true;
+      // The wrapper must also preserve loopback-only, random-port semantics.
+      for (const [key, expected] of [["--remote-debugging-address", "127.0.0.1"], ["--remote-debugging-port", "0"]]) {
+        const flags = args.filter((arg) => typeof arg === "string" && (arg === key || arg.startsWith(key + "=")));
+        if (flags.length !== 1 || flags[0] !== key + "=" + expected)
+          throw Error("Browser debugging flags changed");
+      }
+    } else {
+      const input = child.stdio?.[3], output = child.stdio?.[4];
+      if (!input?.write || !output?.on || exited) throw Error("Missing browser pipes");
+      client = new PipeClient(input, output, { timeoutMs: platform === "win32" ? 10000 : 7000 });
+    }
     const version = await client.send("Browser.getVersion");
     if (typeof version.product !== "string" || !version.product)
       throw Error("Invalid browser handshake");
@@ -322,36 +382,51 @@ export async function launchIsolatedBrowser(
     throw failure(
       503,
       platform === "win32"
-        ? "已找到浏览器，但独立登录通信未建立。请更新 Magpie 和 Chrome / Edge；如受单位策略管理，请检查是否允许浏览器开发者工具。"
-        : "已找到浏览器，但独立窗口启动失败。请更新 Chrome / Edge 后重试。",
+        ? "已找到浏览器，但独立登录通信未建立。请更新 Magpie 和 Chrome / Edge / 豆包；Chrome++ 等转发器可显式开启插件选项“本机随机端口兼容登录”；单位管理设备请检查开发者工具策略。"
+        : "已找到浏览器，但独立登录通信未建立。请更新 Magpie 和 Chrome / Edge；如受单位策略管理，请检查是否允许浏览器开发者工具。",
     );
+  }
+  async function pageSession() {
+    const { targetInfos = [] } = await client.send("Target.getTargets");
+    const pages = targetInfos.filter((p) => p.type === "page");
+    if (!pages.length) throw Error("登录窗口已关闭。");
+    const page = pages.find((p) => isDoubaoPage(p.url));
+    if (!page) return null;
+    if (attachment?.targetId !== page.targetId) {
+      if (attachment)
+        await client
+          .send("Target.detachFromTarget", {
+            sessionId: attachment.sessionId,
+          })
+          .catch(() => {});
+      const { sessionId } = await client.send("Target.attachToTarget", {
+        targetId: page.targetId,
+        flatten: true,
+      });
+      attachment = { targetId: page.targetId, sessionId };
+    }
+    return attachment.sessionId;
   }
   return {
     async cookies() {
-      const { targetInfos = [] } = await client.send("Target.getTargets");
-      const pages = targetInfos.filter((p) => p.type === "page");
-      if (!pages.length) throw Error("登录窗口已关闭。");
-      const page = pages.find((p) => isDoubaoPage(p.url));
-      if (!page) return [];
-      if (attachment?.targetId !== page.targetId) {
-        if (attachment)
-          await client
-            .send("Target.detachFromTarget", {
-              sessionId: attachment.sessionId,
-            })
-            .catch(() => {});
-        const { sessionId } = await client.send("Target.attachToTarget", {
-          targetId: page.targetId,
-          flatten: true,
-        });
-        attachment = { targetId: page.targetId, sessionId };
-      }
+      const sessionId = await pageSession();
+      if (!sessionId) return [];
       const { cookies = [] } = await client.send(
         "Network.getCookies",
         { urls: [LOGIN_URL] },
-        attachment.sessionId,
+        sessionId,
       );
       return cookies;
+    },
+    async identity() {
+      const sessionId = await pageSession();
+      if (!sessionId) return {};
+      const { result } = await client.send(
+        "Runtime.evaluate",
+        { expression: IDENTITY_EXPRESSION, returnByValue: true },
+        sessionId,
+      );
+      return sessionIdentity(result?.value);
     },
     dispose,
   };
@@ -370,6 +445,7 @@ export class BrowserLogin {
         : chmod(profile, 0o700),
     pollMs = 2000,
     ttlMs = 10 * 60_000,
+    platform = process.platform,
     now = Date.now,
   }) {
     this.tmpRoot = tmpRoot;
@@ -379,6 +455,7 @@ export class BrowserLogin {
     this.protectProfile = protectProfile;
     this.pollMs = pollMs;
     this.ttlMs = ttlMs;
+    this.platform = platform;
     this.now = now;
     this.current = null;
     this.disposed = false;
@@ -406,6 +483,11 @@ export class BrowserLogin {
   }
   async start(browserId, context = {}) {
     if (this.disposed) throw failure(503, "登录服务正在停止。");
+    if (browserId === "doubao" && this.platform !== "win32")
+      throw failure(
+        400,
+        "豆包内置浏览器仅支持 Windows。请改用 Chrome / Edge，或在插件选项中恢复自动选择。",
+      );
     if (this.current) {
       if (
         (this.current.context.destination || "local") !==
@@ -452,7 +534,9 @@ export class BrowserLogin {
         throw failure(
           409,
           browserId === undefined
-            ? "未检测到 Chrome 或 Edge。请安装其中一个后重试；Windows 自定义安装请查看插件 README。"
+            ? this.platform === "win32"
+              ? "未检测到 Chrome、Edge 或豆包内置浏览器。请安装其中一个后重试；Windows 自定义安装请查看插件 README。"
+              : "未检测到 Chrome、Edge 或 Chromium。自定义安装请设置 DW_CHROME_BIN / DW_EDGE_BIN / DW_CHROMIUM_BIN。"
             : "未检测到所选浏览器。请安装它，或在插件选项中恢复自动选择。",
         );
       if (session.cancelled) return;
@@ -472,7 +556,10 @@ export class BrowserLogin {
         }
         if (session.cancelled) return;
         try {
-          session.handle = await this.launch(browser, session.profile);
+          session.handle = await this.launch(browser, session.profile, {
+            platform: this.platform,
+            transport: session.context.transport === "port" ? "port" : "pipe",
+          });
         } catch (error) {
           if (error?.cleanupPending) {
             session.cleanupPending = true;
@@ -494,7 +581,7 @@ export class BrowserLogin {
           "waiting",
           "请在新打开的 " +
             browser.name +
-            " 窗口登录豆包。完成后会自动接入 Magpie，无需复制 Cookie。",
+            " 窗口登录豆包，再回到确认页接入 Magpie，无需复制 Cookie。",
         );
         this.schedule(session);
         return;
@@ -506,7 +593,7 @@ export class BrowserLogin {
         "error",
         error.status
           ? error.message
-          : "浏览器登录启动失败，请检查桌面会话与 Chrome / Edge 安装。",
+          : "浏览器登录启动失败，请检查桌面会话与 Chrome / Edge / 豆包安装。",
       );
       await this.finish(session);
     } finally {
@@ -569,9 +656,32 @@ export class BrowserLogin {
         "检测到豆包登录，正在核验账号并保存到本机…",
       );
       // Exactly one import attempt. A timeout is uncertain, not a reason to retry silently.
+      let identity = {},
+        identityMissing = true;
+      try {
+        identity = (await session.handle.identity?.()) || {};
+        identityMissing = !(identity.deviceId && identity.webId);
+      } catch {
+        identity = {};
+      }
+      if (
+        identityMissing &&
+        this.current === session &&
+        !session.cancelled
+      )
+        this.update(
+          session,
+          "importing",
+          "未从浏览器读取到完整的设备标识，正在回退本机客户端 Local State…",
+          { identityMissing: true },
+        );
+      if (this.current !== session || session.cancelled) return;
       let result;
       try {
-        result = await this.importAccount(cookies, session.context);
+        result = await this.importAccount(cookies, {
+          ...session.context,
+          identity,
+        });
       } catch {
         this.update(
           session,
@@ -602,6 +712,7 @@ export class BrowserLogin {
           updated: result.updated,
           cloudSynced: result.cloudSynced === true,
           cloudOrigin: result.cloudOrigin || "",
+          identityMissing,
         },
       );
       await this.finish(session);

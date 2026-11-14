@@ -212,9 +212,9 @@ export function vendorError(status, value = {}) {
     return withCode(
       fail(
         429,
-        "豆包上游返回请求限流" +
+        "豆包上游拒绝了这次请求" +
           suffix +
-          "。本次响应未明确要求人工验证；请暂停重复测试，按官方提示稍后重试。",
+          "。若这个账号缺少设备标识（device_id / web_id），请重新登录本插件，让登录窗口从会话中采集后再试；否则请稍后重试。",
       ),
       "rate_limited",
     );
@@ -251,25 +251,43 @@ async function jsonLimited(response) {
     reader.releaseLock();
   }
 }
-export async function deviceMetadata(home = homedir()) {
+export async function deviceMetadata({
+  home = homedir(),
+  platform = process.platform,
+  env = process.env,
+} = {}) {
   // Read only a device identifier, never the desktop client's Cookie database.
-  try {
-    const base =
-      process.platform === "win32"
-        ? join(
-            process.env.LOCALAPPDATA || join(home, "AppData", "Local"),
+  // The desktop build has used more than one product folder name, so try the
+  // known ones in order instead of assuming a single install layout.
+  const roots =
+    platform === "win32"
+      ? [
+          join(
+            env.LOCALAPPDATA || join(home, "AppData", "Local"),
             "DoubaoWork",
             "User Data",
-          )
-        : join(home, "Library", "Application Support", "DoubaoWork");
-    const p = join(base, "Local State");
-    if ((await stat(p)).size > 8 * 1024 * 1024) return {};
-    const s = JSON.parse(await readFile(p, "utf8")),
-      id = str(s?.aha?.device?.device_id);
-    return /^[a-zA-Z0-9_-]{1,64}$/.test(id) ? { deviceId: id } : {};
-  } catch {
-    return {};
+          ),
+          join(
+            env.LOCALAPPDATA || join(home, "AppData", "Local"),
+            "Doubao",
+            "User Data",
+          ),
+        ]
+      : platform === "linux"
+        ? [join(env.XDG_CONFIG_HOME || join(home, ".config"), "DoubaoWork")]
+        : [join(home, "Library", "Application Support", "DoubaoWork")];
+  for (const base of roots) {
+    try {
+      const p = join(base, "Local State");
+      if ((await stat(p)).size > 8 * 1024 * 1024) continue;
+      const s = JSON.parse(await readFile(p, "utf8")),
+        id = str(s?.aha?.device?.device_id);
+      if (/^[a-zA-Z0-9_-]{1,64}$/.test(id)) return { deviceId: id };
+    } catch {
+      // Try the next known layout.
+    }
   }
+  return {};
 }
 export function parseCatalog(value) {
   const grouped = new Map();

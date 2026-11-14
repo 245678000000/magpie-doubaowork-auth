@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   endpoint,
   credentials,
@@ -8,6 +11,7 @@ import {
   parseCatalog,
   createApi,
   quotaView,
+  deviceMetadata,
 } from "../protocol.mjs";
 const secret = {
   cookieHeader: "sessionid=FIXTURE_SESSION; web_id=456",
@@ -141,7 +145,7 @@ test("仅 decision.type=verify 判定人工验证，429 外壳码不当成验证
     error_msg: "FIXTURE_PRIVATE_TEXT",
   });
   assert.equal(rate.reason, "rate_limited");
-  assert(rate.message.includes("本次响应未明确要求人工验证"));
+  assert(rate.message.includes("设备标识"));
   assert(!rate.message.includes("豆包上游明确要求人工验证"));
   assert(!rate.message.includes("FIXTURE_PRIVATE_TEXT"));
   assert.equal(
@@ -169,4 +173,50 @@ test("非 JSON 的 HTTP 429 仍保留限流分类，不反射网页内容", asyn
       e.reason === "rate_limited" &&
       !e.message.includes("FIXTURE_PRIVATE_GATEWAY_BODY"),
   );
+});
+
+const localState = (id) =>
+  JSON.stringify({ aha: { device: { device_id: id } } });
+
+test("deviceMetadata 按 Windows 顺序回退，并跳过格式非法的 device_id", async () => {
+  const home = await mkdtemp(join(tmpdir(), "dw-meta-"));
+  const work = join(home, "DoubaoWork", "User Data");
+  const doubao = join(home, "Doubao", "User Data");
+  try {
+    await mkdir(work, { recursive: true });
+    await mkdir(doubao, { recursive: true });
+    const opts = { platform: "win32", home, env: { LOCALAPPDATA: home } };
+
+    await writeFile(join(work, "Local State"), localState("1111111111111111"));
+    await writeFile(join(doubao, "Local State"), localState("2222222222222222"));
+    assert.deepEqual(await deviceMetadata(opts), { deviceId: "1111111111111111" });
+
+    await writeFile(join(work, "Local State"), localState("bad id!"));
+    assert.deepEqual(await deviceMetadata(opts), { deviceId: "2222222222222222" });
+
+    await rm(join(work, "Local State"));
+    assert.deepEqual(await deviceMetadata(opts), { deviceId: "2222222222222222" });
+
+    await rm(join(doubao, "Local State"));
+    assert.deepEqual(await deviceMetadata(opts), {});
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("deviceMetadata 在 macOS 只读取 DoubaoWork，不读其他产品的 Local State", async () => {
+  const home = await mkdtemp(join(tmpdir(), "dw-meta-mac-"));
+  const work = join(home, "Library", "Application Support", "DoubaoWork");
+  const other = join(home, "Library", "Application Support", "Doubao");
+  try {
+    await mkdir(work, { recursive: true });
+    await mkdir(other, { recursive: true });
+    const opts = { platform: "darwin", home, env: {} };
+    await writeFile(join(other, "Local State"), localState("3333333333333333"));
+    assert.deepEqual(await deviceMetadata(opts), {});
+    await writeFile(join(work, "Local State"), localState("4444444444444444"));
+    assert.deepEqual(await deviceMetadata(opts), { deviceId: "4444444444444444" });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });

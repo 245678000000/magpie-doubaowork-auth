@@ -148,14 +148,24 @@ test("登录确认只允许同源 POST，确认前不读取或保存账号", asy
     }
     async confirm(id) {
       assert.equal(id, "FLOW_FIXTURE");
-      await this.options.importAccount([
+      await this.options.importAccount(
+        [
+          {
+            name: "sessionid",
+            value: "FIXTURE_COOKIE",
+            domain: ".doubao.com",
+            path: "/",
+          },
+        ],
         {
-          name: "sessionid",
-          value: "FIXTURE_COOKIE",
-          domain: ".doubao.com",
-          path: "/",
+          manual: true,
+          identity: {
+            deviceId: "BROWSER_DEVICE", webId: "BROWSER_WEB",
+            cookieHeader: "sessionid=OTHER_ACCOUNT", userId: "OTHER_USER",
+            cookies: [{ name: "sessionid", value: "OTHER_ACCOUNT", domain: ".doubao.com", path: "/" }],
+          },
         },
-      ]);
+      );
       this.state = { state: "success", active: false, message: "已接入" };
     }
   }
@@ -167,6 +177,10 @@ test("登录确认只允许同源 POST，确认前不读取或保存账号", asy
       api: {
         identify: async (secret) => {
           identifies++;
+          assert.equal(secret.deviceId, "BROWSER_DEVICE");
+          assert.equal(secret.webId, "BROWSER_WEB");
+          assert.equal(secret.cookieHeader, "sessionid=FIXTURE_COOKIE");
+          assert.equal(secret.userId, undefined);
           return { ...secret, userId: "FIXTURE_USER", name: "测试账号" };
         },
       },

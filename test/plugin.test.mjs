@@ -137,6 +137,7 @@ test("原生插件开关即时生效：关闭工具桥和双重签到 opt-in", a
   assert.deepEqual(
     hooks.auth.options.map((o) => [o.key, o.default]),
     [
+      ["browser_loopback", false],
       ["prompt_tools", true],
       ["checkin_enabled", false],
     ],
@@ -177,4 +178,20 @@ test("客户端只接收规范错误分类与数字上游码，不携带挑战�
   assert.equal(body.error.code, "verification_required");
   assert.equal(body.error.upstream_code, 710022004);
   assert(!JSON.stringify(body).includes("FIXTURE_PRIVATE_CHALLENGE"));
+});
+
+
+test("Chrome++ loopback login stays opt-in and is read live from the native switch", async () => {
+  const calls = [], values = {};
+  const hooks = _internal.createHooks({ directory: "/fixture", magpie: { option: (_provider, key) => values[key] } }, {}, {
+    api: {}, checkin: {}, login: { start: async (options) => { calls.push(options); return {}; } },
+  });
+  await hooks.auth.methods[0].authorize();
+  assert.equal(calls[0].transport, "pipe");
+  values.browser_loopback = true;
+  await hooks.auth.methods[0].authorize();
+  assert.equal(calls[1].transport, "port");
+  values.browser_loopback = false;
+  await hooks.auth.methods[0].authorize();
+  assert.equal(calls[2].transport, "pipe");
 });
