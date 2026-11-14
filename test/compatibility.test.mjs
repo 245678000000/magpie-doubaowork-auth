@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { mkdtemp, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -149,4 +150,31 @@ test("a wrapper widening the listener is closed after private-profile verificati
     spawnProcess: () => { const child = new EventEmitter(); queueMicrotask(() => { child.emit("spawn"); child.emit("exit", 0); }); return child; },
   }), (error) => error.status === 503 && !error.cleanupPending);
   assert.deepEqual(calls, ["Browser.getBrowserCommandLine", "Browser.close", "disconnect"]);
+});
+
+
+test("cold browser startup has a separate bounded grace, normal commands retain their shorter deadline", async () => {
+  const child = new EventEmitter();
+  child.stdio = [null, null, null, new PassThrough(), new PassThrough()];
+  child.kill = () => assert.fail("Browser.close should exit the fixture");
+  let client;
+  class Pipe {
+    constructor(_input, _output, options) { client = this; this.timeoutMs = options.timeoutMs; assert.equal(this.timeoutMs, 15000); }
+    async send(method) {
+      if (method === "Browser.getVersion") { assert.equal(this.timeoutMs, 15000); return { product: "Chrome/fixture" }; }
+      assert.equal(this.timeoutMs, 7000);
+      if (method === "Target.getTargets") return { targetInfos: [{ type: "page", targetId: "fixture", url: "about:blank" }] };
+      if (method === "Browser.close") child.emit("exit", 0);
+      return {};
+    }
+    close() { this.closed = true; }
+  }
+  const handle = await launchIsolatedBrowser({ id: "chrome", path: "/fixture/chrome" }, "/fixture/profile", {
+    platform: "linux", env: { DISPLAY: ":99" }, uid: 1000, PipeClientImpl: Pipe,
+    spawnProcess: () => { queueMicrotask(() => child.emit("spawn")); return child; },
+  });
+  assert.equal(client.timeoutMs, 7000);
+  assert.deepEqual(await handle.cookies(), []);
+  await handle.dispose();
+  assert(client.closed);
 });

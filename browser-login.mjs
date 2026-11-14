@@ -283,7 +283,7 @@ export async function launchIsolatedBrowser(
   profile,
   { spawnProcess = spawn, platform = process.platform, blank = false,
     transport = "pipe", env = process.env, uid = process.getuid?.(),
-    portAddress = waitDevToolsAddress, PortClient = SocketClient } = {},
+    portAddress = waitDevToolsAddress, PortClient = SocketClient, PipeClientImpl = PipeClient } = {},
 ) {
   if (!["pipe", "port"].includes(transport)) throw failure(400, "浏览器通信选项无效。");
   if (platform === "linux") {
@@ -348,7 +348,7 @@ export async function launchIsolatedBrowser(
     started = true;
     if (portMode) {
       client = new PortClient(await portAddress(profile), {
-        timeoutMs: platform === "win32" ? 10000 : 7000,
+        timeoutMs: 15000,
       });
       await client.ready;
       const { arguments: args = [] } = await client.send("Browser.getBrowserCommandLine");
@@ -365,12 +365,18 @@ export async function launchIsolatedBrowser(
     } else {
       const input = child.stdio?.[3], output = child.stdio?.[4];
       if (!input?.write || !output?.on || exited) throw Error("Missing browser pipes");
-      client = new PipeClient(input, output, { timeoutMs: platform === "win32" ? 10000 : 7000 });
+      client = new PipeClientImpl(input, output, { timeoutMs: 15000 });
     }
     const version = await client.send("Browser.getVersion");
     if (typeof version.product !== "string" || !version.product)
       throw Error("Invalid browser handshake");
-  } catch {
+    // Cold graphical startup gets a bounded grace period; subsequent commands
+    // keep the shorter deadline. This does not retry login or upstream requests.
+    client.timeoutMs = platform === "win32" ? 10000 : 7000;
+  } catch (cause) {
+    if (blank) console.error("Blank-browser handshake:",
+      cause?.message === "浏览器响应超时。" ? "timeout" :
+      cause?.message === "浏览器登录窗口已断开。" ? "closed" : "failed");
     try {
       await dispose();
     } catch {
