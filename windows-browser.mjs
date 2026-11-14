@@ -9,8 +9,32 @@ export const envValue = (env, name) =>
   env[name] ?? Object.entries(env).find(([k]) => k.toLowerCase() === name.toLowerCase())?.[1];
 
 export const windowsChoices = [
-  { id: "chrome", name: "Google Chrome", exe: "chrome.exe", dir: ["Google", "Chrome"] },
-  { id: "edge", name: "Microsoft Edge", exe: "msedge.exe", dir: ["Microsoft", "Edge"] },
+  {
+    id: "chrome",
+    name: "Google Chrome",
+    exe: "chrome.exe",
+    dir: ["Google", "Chrome", "Application"],
+    env: "DW_CHROME_BIN",
+    appPaths: true,
+  },
+  {
+    id: "edge",
+    name: "Microsoft Edge",
+    exe: "msedge.exe",
+    dir: ["Microsoft", "Edge", "Application"],
+    env: "DW_EDGE_BIN",
+    appPaths: true,
+  },
+  // Doubao ships a Chromium runtime under app\; it only behaves as a browser
+  // when started with --saman-browser-entry. The sibling Doubao_browser_proxy.exe
+  // is a forwarder and drops the inherited CDP pipes, so the exact basename matters.
+  {
+    id: "doubao",
+    name: "豆包内置浏览器",
+    exe: "Doubao.exe",
+    dir: ["Doubao", "Application", "app"],
+    env: "DW_DOUBAO_BIN",
+  },
 ];
 
 function localPath(value) {
@@ -33,7 +57,7 @@ export function windowsInstallPaths(home, env) {
 
 export function windowsExecutable(value, exe) {
   const file = localPath(value);
-  return file && path.basename(file).toLowerCase() === exe ? file : null;
+  return file && path.basename(file).toLowerCase() === exe.toLowerCase() ? file : null;
 }
 
 async function powershell(script, env, extra = {}, timeoutMs = 10000) {

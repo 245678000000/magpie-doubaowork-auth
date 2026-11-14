@@ -30,3 +30,6 @@ jobs:
         with:
           bun-version: '1.4.4'
       - run: bun run scripts/windows-browser-smoke.mjs
+      # The vendor client is never present on a public runner, so this prints
+      # SKIP and exits 0; it still guards the skip path against bit-rot.
+      - run: bun run scripts/doubao-browser-smoke.mjs

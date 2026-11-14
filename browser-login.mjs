@@ -58,14 +58,12 @@ export async function availableBrowsers(
     const found = await Promise.all(
       windowsChoices.map((b) =>
         first(b, [
-          envValue(env, b.id === "chrome" ? "DW_CHROME_BIN" : "DW_EDGE_BIN"),
-          ...roots.map((root) =>
-            winPath.join(root, ...b.dir, "Application", b.exe),
-          ),
+          envValue(env, b.env),
+          ...roots.map((root) => winPath.join(root, ...b.dir, b.exe)),
         ]),
       ),
     );
-    if (found.some((browser) => !browser)) {
+    if (found.some((browser, i) => !browser && windowsChoices[i].appPaths)) {
       const registered = await readAppPaths(env);
       return (
         await Promise.all(
@@ -75,7 +73,7 @@ export async function availableBrowsers(
         )
       ).filter(Boolean);
     }
-    return found;
+    return found.filter(Boolean);
   }
   if (platform !== "darwin") return [];
   const choices = [
@@ -146,8 +144,8 @@ export function doubaoCookies(input, now = Date.now() / 1000) {
     ? rows
     : [];
 }
-export function browserArgs(profile, { blank = false } = {}) {
-  return [
+export function browserArgs(profile, { blank = false, id = "" } = {}) {
+  const args = [
     "--remote-debugging-pipe",
     "--user-data-dir=" + profile,
     "--no-first-run",
@@ -156,6 +154,11 @@ export function browserArgs(profile, { blank = false } = {}) {
     "--new-window",
     blank ? "about:blank" : LOGIN_URL,
   ];
+  // Doubao.exe is the desktop client; --saman-browser-entry is what turns it into
+  // the embedded Chromium browser. Documented as best-effort: a vendor rename or
+  // flag change makes the handshake fail loudly instead of silently reusing the app.
+  if (id === "doubao") args.unshift("--saman-browser-entry");
+  return args;
 }
 
 // CDP over inherited anonymous pipes (fd 3/4), not a listening debugging port.
@@ -255,11 +258,15 @@ export async function launchIsolatedBrowser(
   profile,
   { spawnProcess = spawn, platform = process.platform, blank = false } = {},
 ) {
-  const child = spawnProcess(browser.path, browserArgs(profile, { blank }), {
-    stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
-    shell: false,
-    detached: false,
-  });
+  const child = spawnProcess(
+    browser.path,
+    browserArgs(profile, { blank, id: browser.id }),
+    {
+      stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
+      shell: false,
+      detached: false,
+    },
+  );
   let client;
   let exited = false;
   const exit = new Promise((resolve) => {
@@ -322,8 +329,8 @@ export async function launchIsolatedBrowser(
     throw failure(
       503,
       platform === "win32"
-        ? "已找到浏览器，但独立登录通信未建立。请更新 Magpie 和 Chrome / Edge；如受单位策略管理，请检查是否允许浏览器开发者工具。"
-        : "已找到浏览器，但独立窗口启动失败。请更新 Chrome / Edge 后重试。",
+        ? "已找到浏览器，但独立登录通信未建立。请更新 Magpie 和 Chrome / Edge / 豆包；如受单位策略管理，请检查是否允许浏览器开发者工具。"
+        : "已找到浏览器，但独立登录通信未建立。请更新 Magpie 和 Chrome / Edge；如受单位策略管理，请检查是否允许浏览器开发者工具。",
     );
   }
   return {
@@ -370,6 +377,7 @@ export class BrowserLogin {
         : chmod(profile, 0o700),
     pollMs = 2000,
     ttlMs = 10 * 60_000,
+    platform = process.platform,
     now = Date.now,
   }) {
     this.tmpRoot = tmpRoot;
@@ -379,6 +387,7 @@ export class BrowserLogin {
     this.protectProfile = protectProfile;
     this.pollMs = pollMs;
     this.ttlMs = ttlMs;
+    this.platform = platform;
     this.now = now;
     this.current = null;
     this.disposed = false;
@@ -406,6 +415,11 @@ export class BrowserLogin {
   }
   async start(browserId, context = {}) {
     if (this.disposed) throw failure(503, "登录服务正在停止。");
+    if (browserId === "doubao" && this.platform !== "win32")
+      throw failure(
+        400,
+        "豆包内置浏览器仅支持 Windows。请改用 Chrome / Edge，或在插件选项中恢复自动选择。",
+      );
     if (this.current) {
       if (
         (this.current.context.destination || "local") !==
@@ -452,7 +466,9 @@ export class BrowserLogin {
         throw failure(
           409,
           browserId === undefined
-            ? "未检测到 Chrome 或 Edge。请安装其中一个后重试；Windows 自定义安装请查看插件 README。"
+            ? this.platform === "win32"
+              ? "未检测到 Chrome、Edge 或豆包内置浏览器。请安装其中一个后重试；Windows 自定义安装请查看插件 README。"
+              : "未检测到 Chrome 或 Edge。请安装其中一个后重试。"
             : "未检测到所选浏览器。请安装它，或在插件选项中恢复自动选择。",
         );
       if (session.cancelled) return;
@@ -506,7 +522,7 @@ export class BrowserLogin {
         "error",
         error.status
           ? error.message
-          : "浏览器登录启动失败，请检查桌面会话与 Chrome / Edge 安装。",
+          : "浏览器登录启动失败，请检查桌面会话与 Chrome / Edge / 豆包安装。",
       );
       await this.finish(session);
     } finally {
