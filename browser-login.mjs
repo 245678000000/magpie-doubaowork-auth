@@ -354,8 +354,14 @@ export async function launchIsolatedBrowser(
       const { arguments: args = [] } = await client.send("Browser.getBrowserCommandLine");
       // A wrapper can override user-data-dir; never close or read that browser.
       if (!Array.isArray(args) || args.filter((arg) => typeof arg === "string" && arg.startsWith("--user-data-dir=")).length !== 1 ||
-          !args.includes("--user-data-dir=" + profile)) throw Error("Browser profile mismatch");
+          !args.includes("--user-data-dir=" + profile) || args.includes("--user-data-dir")) throw Error("Browser profile mismatch");
       verifiedProfile = true;
+      // The wrapper must also preserve loopback-only, random-port semantics.
+      for (const [key, expected] of [["--remote-debugging-address", "127.0.0.1"], ["--remote-debugging-port", "0"]]) {
+        const flags = args.filter((arg) => typeof arg === "string" && (arg === key || arg.startsWith(key + "=")));
+        if (flags.length !== 1 || flags[0] !== key + "=" + expected)
+          throw Error("Browser debugging flags changed");
+      }
     } else {
       const input = child.stdio?.[3], output = child.stdio?.[4];
       if (!input?.write || !output?.on || exited) throw Error("Missing browser pipes");

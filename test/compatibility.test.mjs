@@ -83,7 +83,7 @@ test("port startup survives a wrapper exiting, and validates profile before read
     constructor() { client = this; this.ready = Promise.resolve(); this.disconnected = new Promise((r) => { this.finish = r; }); }
     async send(method) {
       calls.push(method);
-      if (method === "Browser.getBrowserCommandLine") return { arguments: ["--user-data-dir=" + profile] };
+      if (method === "Browser.getBrowserCommandLine") return { arguments: ["--user-data-dir=" + profile, "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0"] };
       if (method === "Browser.getVersion") return { product: "Chrome/fixture" };
       if (method === "Target.getTargets") return { targetInfos: [{ type: "page", targetId: "fixture", url: "about:blank" }] };
       if (method === "Browser.close") { this.socketClosed = true; this.finish(); }
@@ -128,4 +128,25 @@ test("identity expression rechecks the live origin and tolerates one malformed l
   assert.deepEqual(JSON.parse(evaluate("https://www.doubao.com/chat/", { client_device_info: "bad", samantha_web_web_id: '{"web_id":"WEB_FIXTURE"}' })), { webId: "WEB_FIXTURE", deviceId: "", clientVersion: "", chromiumVersion: "", channel: "", userAgent: "" });
   for (const url of ["https://foreign.test/", "http://www.doubao.com/", "https://www.doubao.com:9999/"])
     assert.equal(evaluate(url, { client_device_info: '{"deviceId":"SENSITIVE"}' }), "{}");
+});
+
+
+test("a wrapper widening the listener is closed after private-profile verification, before any cookie read", async () => {
+  const calls = [];
+  class ChangedFlags {
+    constructor() { this.ready = Promise.resolve(); this.disconnected = Promise.resolve(); }
+    async send(method) {
+      calls.push(method);
+      if (method === "Browser.getBrowserCommandLine") return { arguments: ["--user-data-dir=/fixture/private", "--remote-debugging-address=0.0.0.0", "--remote-debugging-port=0"] };
+      if (method === "Browser.close") this.socketClosed = true;
+      return {};
+    }
+    close() { calls.push("disconnect"); this.closed = true; }
+  }
+  await assert.rejects(launchIsolatedBrowser({ id: "chrome", path: "/fixture/chrome" }, "/fixture/private", {
+    platform: "win32", transport: "port", PortClient: ChangedFlags,
+    portAddress: async () => "ws://127.0.0.1:1/devtools/browser/fixture",
+    spawnProcess: () => { const child = new EventEmitter(); queueMicrotask(() => { child.emit("spawn"); child.emit("exit", 0); }); return child; },
+  }), (error) => error.status === 503 && !error.cleanupPending);
+  assert.deepEqual(calls, ["Browser.getBrowserCommandLine", "Browser.close", "disconnect"]);
 });
